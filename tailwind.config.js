@@ -1,0 +1,87 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ["./index.html", "./src/**/*.{js,jsx}"],
+  darkMode: ['selector', '[data-theme="dark"], .dark'],
+  theme: {
+    extend: {
+      colors: {
+        // Purple (Indigo) + Cyan theme — matched to guestflow-v2
+        ocean: {
+          950: '#050716',
+          900: '#0a0e1a',
+          800: '#0f1629',
+          700: '#141c33',
+          600: '#1a2340',
+          500: '#2d1b69',
+        },
+        primary: {
+          50:  '#f3f1ff',
+          100: '#e9e4ff',
+          200: '#d4c9ff',
+          300: '#b8a7ff',
+          400: '#a29bfe',
+          500: '#6c5ce7',
+          600: '#5a4bd1',
+          700: '#483ab5',
+          800: '#362a88',
+          900: '#1a0a3e',
+        },
+        teal: {
+          50:  '#e6fffe',
+          100: '#b3fffc',
+          200: '#80fffa',
+          300: '#4dfff8',
+          400: '#55efc4',
+          500: '#00cec9',
+          600: '#00b5b0',
+          700: '#008a86',
+          800: '#006763',
+          900: '#003f3d',
+        },
+        surface: {
+          50:  '#f4f7fc',
+          100: '#eef2f9',
+          card:'#FFFFFF',
+          dark:'#0f1629',
+        }
+      },
+      fontFamily: {
+        sans:    ['Plus Jakarta Sans', 'Inter', 'sans-serif'],
+        display: ['Outfit', 'Plus Jakarta Sans', 'sans-serif'],
+        mono:    ['JetBrains Mono', 'monospace'],
+      },
+      animation: {
+        'fade-in':    'fadeIn 0.4s ease both',
+        'slide-up':   'slideUp 0.45s ease both',
+        'scale-in':   'scaleIn 0.35s ease both',
+        'pulse-dot':  'pulseDot 1.6s ease-in-out infinite',
+        'float':      'float 4s ease-in-out infinite',
+        'gradient':   'gradientShift 5s ease infinite',
+        'ping-slow':  'ping 1.6s ease-in-out infinite',
+        'glow':       'glowPulse 3s ease-in-out infinite',
+        'notif-pop':  'notifPop 0.4s ease both',
+      },
+      keyframes: {
+        fadeIn:       { from: { opacity: '0' },                              to: { opacity: '1' } },
+        slideUp:      { from: { opacity: '0', transform: 'translateY(20px)' }, to: { opacity: '1', transform: 'translateY(0)' } },
+        scaleIn:      { from: { opacity: '0', transform: 'scale(0.92)' },    to: { opacity: '1', transform: 'scale(1)' } },
+        float:        { '0%,100%': { transform: 'translateY(0)' },           '50%': { transform: 'translateY(-8px)' } },
+        gradientShift:{ '0%,100%': { backgroundPosition: '0% 50%' },         '50%': { backgroundPosition: '100% 50%' } },
+        glowPulse:    { '0%,100%': { boxShadow: '0 0 20px rgba(108,92,231,0.4)' }, '50%': { boxShadow: '0 0 40px rgba(108,92,231,0.7)' } },
+        notifPop:     { '0%': { transform: 'scale(0)', opacity: '0' }, '70%': { transform: 'scale(1.15)', opacity: '1' }, '100%': { transform: 'scale(1)', opacity: '1' } },
+        pulseDot:     { '0%,100%': { opacity: '1' }, '50%': { opacity: '0.4' } },
+      },
+      backgroundSize: { '200': '200% 200%' },
+      boxShadow: {
+        'teal-glow':  '0 0 0 1px rgba(108,92,231,0.2), 0 8px 32px rgba(108,92,231,0.2)',
+        'card':       '0 4px 20px rgba(0,0,0,0.08)',
+        'card-hover': '0 8px 32px rgba(108,92,231,0.18)',
+        'btn':        '0 4px 14px rgba(108,92,231,0.4)',
+        'btn-hover':  '0 6px 22px rgba(108,92,231,0.55)',
+        'topbar':     '0 1px 0 rgba(108,92,231,0.2)',
+        'input-focus':'0 0 0 3px rgba(108,92,231,0.18)',
+      },
+    },
+  },
+  plugins: [],
+}

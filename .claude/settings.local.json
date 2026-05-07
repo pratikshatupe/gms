@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//tmp/**)",
+      "Bash(npx vite *)",
+      "Bash(curl -s http://localhost:5174/src/App.jsx)",
+      "Bash(curl -s \"http://localhost:5174/src/pages/setting/Settings.jsx\")",
+      "Bash(curl -s \"http://localhost:5174/src/pages/rolepermission/RolePermission.jsx\")",
+      "Bash(taskkill //F //FI \"WINDOWTITLE eq vite*\")",
+      "Bash(pkill -f \"vite\")",
+      "Bash(tasklist //FI \"IMAGENAME eq node.exe\")",
+      "Bash(taskkill //F //PID 7352 //PID 10244)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' http://localhost:5175/__TRACKED_VAR__)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' http://localhost:5176/__TRACKED_VAR__)",
+      "Bash(node -e \"require\\('./src/services/coupon.service.js'\\); require\\('./src/services/seedCoupons.service.js'\\); require\\('./src/utils/calculateDiscount.js'\\); require\\('./src/controllers/coupon.controller.js'\\); require\\('./src/routes/coupon.routes.js'\\); require\\('./src/services/organization.service.js'\\); console.log\\('OK'\\);\")",
+      "Bash(node -e \"const { calculateDiscount, planPriceFor } = require\\('./src/utils/calculateDiscount'\\); console.log\\('starter:', planPriceFor\\('starter'\\)\\); console.log\\('20% off Pro:', calculateDiscount\\(planPriceFor\\('professional'\\), { discountType:'PERCENTAGE', discountValue:20 }\\)\\); console.log\\('FLAT 500 off Starter:', calculateDiscount\\(planPriceFor\\('starter'\\), { discountType:'FLAT', discountValue:500 }\\)\\); console.log\\('FREE_PLAN Enterprise:', calculateDiscount\\(planPriceFor\\('enterprise'\\), { discountType:'FREE_PLAN', discountValue:100 }\\)\\);\")",
+      "Bash(node --check \"C:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/backend/src/middlewares/auth.middleware.js\")",
+      "Bash(node --check \"C:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/backend/src/controllers/notification.controller.js\")",
+      "Bash(node --check \"C:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/backend/src/services/notification.service.js\")",
+      "Bash(node --check \"C:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/backend/src/routes/notification.routes.js\")",
+      "Bash(npx --yes esbuild --bundle=false --log-level=warning --loader=jsx src/utils/emailTemplates.js)",
+      "Bash(npx --yes esbuild --bundle=false --log-level=warning --loader:.js=jsx --loader:.jsx=jsx src/utils/emailTemplates.js src/pages/settings/EmailTemplates.jsx src/pages/Login.jsx --outdir=/tmp/ebcheck)",
+      "Bash(node --check \"C:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/backend/src/validators/auth.validator.js\")",
+      "Bash(node --check \"C:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/backend/src/controllers/auth.controller.js\")",
+      "Bash(node --check \"C:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/backend/src/controllers/coupon.controller.js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\src\\\\pages\\\\Landing\\\\RegistrationModal.jsx\")",
+      "Bash(npx --no-install vite build)",
+      "Bash(node --check src/pages/settings/EmailTemplates.jsx)",
+      "Bash(node -e \"const p=require\\('@babel/parser'\\); const fs=require\\('fs'\\); const src=fs.readFileSync\\('src/pages/settings/EmailTemplates.jsx','utf8'\\); try { p.parse\\(src, {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK EmailTemplates'\\); } catch \\(e\\) { console.log\\('FAIL EmailTemplates:', e.message\\); }\")",
+      "Bash(node -e \"const p=require\\('@babel/parser'\\); const fs=require\\('fs'\\); const src=fs.readFileSync\\('src/pages/Subscription/index.jsx','utf8'\\); try { p.parse\\(src, {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK Subscription'\\); } catch \\(e\\) { console.log\\('FAIL Subscription:', e.message\\); }\")",
+      "Bash(node -e \"const p=require\\('@babel/parser'\\); const fs=require\\('fs'\\); const src=fs.readFileSync\\('src/pages/Subscription/index.jsx','utf8'\\); try { const ast=p.parse\\(src, {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK lines:', src.split\\('\\\\n'\\).length\\); } catch \\(e\\) { console.log\\('FAIL:', e.message\\); }\")"
+    ]
+  }
+}

@@ -42,6 +42,51 @@ const CARD_RE = /^\d{16}$/;
 const CVV_RE  = /^\d{3,4}$/;
 const EXP_RE  = /^(0[1-9]|1[0-2])\/(\d{2})$/;
 
+/* Mod-10 (Luhn) check used by Step 4 (Payment). Rejects typos that pass
+   the length regex but aren't a real card number. */
+function luhnCheck(digits) {
+  if (!digits || !/^\d+$/.test(digits)) return false;
+  let sum = 0, alt = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let n = parseInt(digits[i], 10);
+    if (alt) { n *= 2; if (n > 9) n -= 9; }
+    sum += n;
+    alt = !alt;
+  }
+  return sum % 10 === 0;
+}
+
+/* Lightweight network detection from leading digits — drives the inline
+   brand badge in the Card field. Returns null when no network matches. */
+function detectCardType(digits) {
+  if (!digits) return null;
+  if (/^4/.test(digits))                  return 'visa';
+  if (/^(5[1-5]|2[2-7])/.test(digits))    return 'mastercard';
+  if (/^(34|37)/.test(digits))            return 'amex';
+  if (/^(60|65|81|82)/.test(digits))      return 'rupay';
+  return null;
+}
+
+const CARD_BRAND_STYLES = {
+  visa:       { label: 'VISA',  bg: '#1A1F71', fg: '#F7B600' },
+  mastercard: { label: 'MC',    bg: '#EB001B', fg: '#F79E1B' },
+  amex:       { label: 'AMEX',  bg: '#2E77BC', fg: '#FFFFFF' },
+  rupay:      { label: 'RuPay', bg: '#097B36', fg: '#FFFFFF' },
+};
+
+const UPI_APPS = [
+  { id: 'gpay',    label: 'GPay',    icon: '🟢', suffix: '@okicici' },
+  { id: 'phonepe', label: 'PhonePe', icon: '🟣', suffix: '@ybl' },
+  { id: 'paytm',   label: 'Paytm',   icon: '🔵', suffix: '@paytm' },
+];
+
+const WALLETS = [
+  { id: 'paytm',     label: 'Paytm Wallet', icon: '🅿️' },
+  { id: 'phonepe',   label: 'PhonePe',      icon: '🟣' },
+  { id: 'amazonpay', label: 'Amazon Pay',   icon: '🅰️' },
+  { id: 'mobikwik',  label: 'Mobikwik',     icon: '🟠' },
+];
+
 /**
  * Bug 20 — merge the Super Admin–authored plans (cgms_subscription_plans)
  * with the marketing-page defaults so the registration "Choose Plan" step
@@ -444,14 +489,24 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
   const [billingCycle, setBillingCycle] = useState('monthly');
 
   /* Payment step state. */
-  const [paymentMethod, setPaymentMethod] = useState('UPI');
-  const [upiId,         setUpiId]         = useState('');
-  const [cardNumber,    setCardNumber]    = useState('');
-  const [cardExpiry,    setCardExpiry]    = useState('');
-  const [cardCvv,       setCardCvv]       = useState('');
-  const [bankName,      setBankName]      = useState('State Bank of India');
-  const [paying,        setPaying]        = useState(false);
-  const [createdOrgRef, setCreatedOrgRef] = useState(null);
+  const [paymentMethod,  setPaymentMethod]  = useState('UPI');
+  const [upiId,          setUpiId]          = useState('');
+  const [upiAppHint,     setUpiAppHint]     = useState(null);
+  const [upiVerifying,   setUpiVerifying]   = useState(false);
+  const [upiVerified,    setUpiVerified]    = useState(false);
+  const [cardNumber,     setCardNumber]     = useState('');
+  const [cardholderName, setCardholderName] = useState('');
+  const [cardExpiry,     setCardExpiry]     = useState('');
+  const [cardCvv,        setCardCvv]        = useState('');
+  const [bankName,       setBankName]       = useState('State Bank of India');
+  const [walletProvider, setWalletProvider] = useState('');
+  const [paying,         setPaying]         = useState(false);
+  const [paymentError,   setPaymentError]   = useState('');
+  const [createdOrgRef,  setCreatedOrgRef]  = useState(null);
+
+  /* Editing the UPI ID always invalidates the prior verification badge —
+     otherwise users could verify, then change the handle, and submit. */
+  useEffect(() => { setUpiVerified(false); }, [upiId]);
 
   const [orgName,     setOrgName]     = useState('');
   const [orgSlug,     setOrgSlug]     = useState('');
@@ -629,14 +684,19 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
       else if (!UPI_RE.test(upiId.trim())) e.upiId = 'Enter a valid UPI ID, e.g. name@bank.';
     } else if (paymentMethod === 'CARD') {
       const digitsOnly = cardNumber.replace(/\s+/g, '');
-      if (!digitsOnly) e.cardNumber = 'Card number is required.';
+      if (!digitsOnly)                    e.cardNumber = 'Card number is required.';
       else if (!CARD_RE.test(digitsOnly)) e.cardNumber = 'Card number must be 16 digits.';
-      if (!cardExpiry) e.cardExpiry = 'Expiry is required.';
+      else if (!luhnCheck(digitsOnly))    e.cardNumber = 'This card number is invalid (failed Luhn check).';
+      if (!cardholderName.trim())                       e.cardholderName = 'Cardholder name is required.';
+      else if (!NAME_ONLY_RE.test(cardholderName.trim())) e.cardholderName = 'Name must contain letters only.';
+      if (!cardExpiry)                  e.cardExpiry = 'Expiry is required.';
       else if (!EXP_RE.test(cardExpiry)) e.cardExpiry = 'Expiry must be in MM/YY format.';
-      if (!cardCvv) e.cardCvv = 'CVV is required.';
+      if (!cardCvv)                  e.cardCvv = 'CVV is required.';
       else if (!CVV_RE.test(cardCvv)) e.cardCvv = 'CVV must be 3 or 4 digits.';
     } else if (paymentMethod === 'NETBANKING') {
       if (!bankName) e.bankName = 'Please select a bank.';
+    } else if (paymentMethod === 'WALLET') {
+      if (!walletProvider) e.walletProvider = 'Please select a wallet provider.';
     }
     setErrs(e);
     return Object.keys(e).length === 0;
@@ -889,7 +949,19 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
         localStorage.setItem('cgms_subscriptions_v1', JSON.stringify(existingSubs));
       } catch (_e) { /* localStorage unavailable — non-fatal */ }
 
-      setCreatedOrgRef({ orgId, planLabel });
+      /* Used by the Step 5 success card to render the receipt details. */
+      const nextBillingIso = (() => {
+        const d = new Date();
+        if (billingCycle === 'yearly') d.setFullYear(d.getFullYear() + 1);
+        else d.setMonth(d.getMonth() + 1);
+        return d.toISOString();
+      })();
+      setCreatedOrgRef({
+        orgId,
+        planLabel,
+        transactionId: txn?.transactionId || null,
+        nextBillingDate: nextBillingIso,
+      });
       setBusy(false);
       setStep(5);
   };
@@ -905,24 +977,36 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
     }
     if (step === 4) {
       if (!validatePayment()) return;
+      setPaymentError('');
       setBusy(true);
       setPaying(true);
-      /* Simulated payment delay. */
-      await new Promise(r => setTimeout(r, 1200));
-      const planObj = livePlans.find((p) => p.id === selectedPlan);
-      const basePrice = planObj?.priceValue || PLAN_PRICE_MAP[selectedPlan] || 0;
-      const cycleAmount = billingCycle === 'yearly'
-        ? Number(planObj?.yearlyPrice) || (basePrice * 12)
-        : basePrice;
-      const txn = cycleAmount > 0 ? {
-        transactionId: `TXN-${Date.now()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`,
-        paymentMethod,
-        methodDetails:
-          paymentMethod === 'UPI'        ? { upiId } :
-          paymentMethod === 'CARD'       ? { cardLast4: cardNumber.replace(/\s+/g,'').slice(-4) } :
-          paymentMethod === 'NETBANKING' ? { bankName } : {},
-      } : null;
-      await persistOrganisation(txn);
+      try {
+        /* Simulated payment delay. */
+        await new Promise(r => setTimeout(r, 1200));
+        const planObj = livePlans.find((p) => p.id === selectedPlan);
+        const basePrice = planObj?.priceValue || PLAN_PRICE_MAP[selectedPlan] || 0;
+        const cycleAmount = billingCycle === 'yearly'
+          ? Number(planObj?.yearlyPrice) || (basePrice * 12)
+          : basePrice;
+        const cardDigits = cardNumber.replace(/\s+/g, '');
+        const txn = cycleAmount > 0 ? {
+          transactionId: `TXN-${Date.now()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`,
+          paymentMethod,
+          methodDetails:
+            paymentMethod === 'UPI'        ? { upiId, verified: upiVerified, app: upiAppHint || null } :
+            paymentMethod === 'CARD'       ? {
+              cardLast4: cardDigits.slice(-4),
+              cardholderName,
+              cardType: detectCardType(cardDigits),
+            } :
+            paymentMethod === 'NETBANKING' ? { bankName } :
+            paymentMethod === 'WALLET'     ? { walletProvider } : {},
+        } : null;
+        await persistOrganisation(txn);
+      } catch (err) {
+        setPaymentError(err?.message || 'Payment failed. Please try again.');
+        setBusy(false);
+      }
       setPaying(false);
       return;
     }
@@ -1240,6 +1324,33 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
       return digits.slice(0, 2) + '/' + digits.slice(2);
     };
 
+    const cardDigits = cardNumber.replace(/\s+/g, '');
+    const cardType   = detectCardType(cardDigits);
+    const brandStyle = cardType ? CARD_BRAND_STYLES[cardType] : null;
+
+    const verifyUpi = async () => {
+      const id = (upiId || '').trim();
+      if (!UPI_RE.test(id)) {
+        setErrs(v => ({ ...v, upiId: 'Enter a valid UPI ID, e.g. name@bank.' }));
+        return;
+      }
+      setUpiVerifying(true);
+      /* Simulated VPA lookup — real integrations would hit the PSP here. */
+      await new Promise(r => setTimeout(r, 800));
+      setUpiVerified(true);
+      setUpiVerifying(false);
+    };
+
+    const pickUpiApp = (app) => {
+      setUpiAppHint(app.id);
+      setUpiId((prev) => {
+        const at = prev.indexOf('@');
+        const handle = at >= 0 ? prev.slice(0, at) : prev;
+        return handle + app.suffix;
+      });
+      setErrs(v => ({ ...v, upiId: null }));
+    };
+
     return (
       <div style={{ padding:'20px 28px 24px', display:'flex', flexDirection:'column', gap:14 }}>
         <p style={{ fontSize:13, color:MID, margin:0, lineHeight:1.5 }}>
@@ -1275,17 +1386,31 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
           </div>
         ) : (
           <>
+            {paymentError && (
+              <div style={{
+                padding:'10px 12px', borderRadius:9,
+                background:'#FEF2F2', border:'1.5px solid #FCA5A5',
+                fontSize:12, color:'#991B1B', fontWeight:600,
+                display:'flex', alignItems:'center', gap:8,
+              }}>
+                <span style={{ fontSize:14 }}>⚠️</span>
+                <span>{paymentError}</span>
+              </div>
+            )}
+
             {/* Payment method tabs */}
             <div role="radiogroup" aria-label="Payment Method"
               style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
               {[
-                { id:'UPI',        label:'UPI',          icon:'📱' },
                 { id:'CARD',       label:'Card',         icon:'💳' },
+                { id:'UPI',        label:'UPI',          icon:'📱' },
                 { id:'NETBANKING', label:'Net Banking',  icon:'🏦' },
+                { id:'WALLET',     label:'Wallet',       icon:'👛' },
               ].map((m) => {
                 const active = paymentMethod === m.id;
                 return (
-                  <button key={m.id} type="button" onClick={() => { setPaymentMethod(m.id); setErrs({}); }}
+                  <button key={m.id} type="button"
+                    onClick={() => { setPaymentMethod(m.id); setErrs({}); setPaymentError(''); }}
                     role="radio" aria-checked={active}
                     style={{
                       flex:'1 1 120px',
@@ -1307,16 +1432,67 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
             {paymentMethod === 'UPI' && (
               <div>
                 <label style={REG_LBL}>UPI ID <span style={{color:'#EF4444'}}>*</span></label>
-                <input
-                  value={upiId}
-                  onChange={e => { setUpiId(e.target.value); setErrs(v => ({ ...v, upiId:null })); }}
-                  placeholder="name@bank"
-                  style={REG_INP(errs.upiId)}
-                  onFocus={e => e.target.style.borderColor=PL}
-                  onBlur={e => e.target.style.borderColor=errs.upiId?'#EF4444':PBORDER}
-                />
+                <div style={{ display:'flex', gap:8 }}>
+                  <input
+                    value={upiId}
+                    onChange={e => { setUpiId(e.target.value); setErrs(v => ({ ...v, upiId:null })); }}
+                    placeholder="yourname@okicici"
+                    style={{ ...REG_INP(errs.upiId), flex:1 }}
+                    onFocus={e => e.target.style.borderColor=PL}
+                    onBlur={e => e.target.style.borderColor=errs.upiId?'#EF4444':PBORDER}
+                  />
+                  <button
+                    type="button"
+                    onClick={verifyUpi}
+                    disabled={upiVerifying || !upiId.trim()}
+                    style={{
+                      padding:'10px 18px', borderRadius:9, border:'none',
+                      background: upiVerified
+                        ? '#10B981'
+                        : upiVerifying
+                        ? '#94A3B8'
+                        : `linear-gradient(135deg,${PL},${PD})`,
+                      color:'#fff', fontSize:12, fontWeight:800,
+                      cursor: upiVerifying || !upiId.trim() ? 'not-allowed' : 'pointer',
+                      opacity: !upiId.trim() ? 0.6 : 1, whiteSpace:'nowrap',
+                      display:'inline-flex', alignItems:'center', gap:6,
+                    }}
+                  >
+                    {upiVerified ? '✓ Verified' : upiVerifying ? 'Verifying…' : 'Verify'}
+                  </button>
+                </div>
                 <ErrMsg msg={errs.upiId} />
-                <p style={{ margin:'6px 0 0', fontSize:11, color:MUTED }}>
+
+                <div style={{ marginTop:10 }}>
+                  <div style={{ fontSize:11, fontWeight:800, color:MID, textTransform:'uppercase', letterSpacing:'.06em', marginBottom:6 }}>
+                    Popular Apps
+                  </div>
+                  <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                    {UPI_APPS.map((app) => {
+                      const active = upiAppHint === app.id;
+                      return (
+                        <button
+                          key={app.id}
+                          type="button"
+                          onClick={() => pickUpiApp(app)}
+                          aria-pressed={active}
+                          style={{
+                            padding:'8px 12px', borderRadius:9,
+                            border:`2px solid ${active ? PL : PBORDER}`,
+                            background: active ? PBG : '#fff',
+                            color: active ? P : DARK,
+                            fontSize:12, fontWeight:700, cursor:'pointer',
+                            display:'inline-flex', alignItems:'center', gap:6,
+                          }}
+                        >
+                          <span style={{ fontSize:14 }}>{app.icon}</span> {app.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <p style={{ margin:'8px 0 0', fontSize:11, color:MUTED }}>
                   You&apos;ll receive a payment request on your UPI app — approve to complete.
                 </p>
               </div>
@@ -1326,16 +1502,50 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
                 <div style={{ gridColumn:'1/-1' }}>
                   <label style={REG_LBL}>Card Number <span style={{color:'#EF4444'}}>*</span></label>
-                  <input
-                    value={cardNumber}
-                    onChange={e => { setCardNumber(formatCardInput(e.target.value)); setErrs(v => ({ ...v, cardNumber:null })); }}
-                    placeholder="1234 5678 9012 3456"
-                    inputMode="numeric"
-                    style={REG_INP(errs.cardNumber)}
-                    onFocus={e => e.target.style.borderColor=PL}
-                    onBlur={e => e.target.style.borderColor=errs.cardNumber?'#EF4444':PBORDER}
-                  />
+                  <div style={{ position:'relative' }}>
+                    <input
+                      value={cardNumber}
+                      onChange={e => { setCardNumber(formatCardInput(e.target.value)); setErrs(v => ({ ...v, cardNumber:null })); }}
+                      placeholder="1234 5678 9012 3456"
+                      inputMode="numeric"
+                      style={{ ...REG_INP(errs.cardNumber), paddingRight: brandStyle ? 78 : 13 }}
+                      onFocus={e => e.target.style.borderColor=PL}
+                      onBlur={e => e.target.style.borderColor=errs.cardNumber?'#EF4444':PBORDER}
+                    />
+                    {brandStyle && (
+                      <span
+                        aria-label={`${brandStyle.label} card`}
+                        style={{
+                          position:'absolute', right:10, top:'50%', transform:'translateY(-50%)',
+                          padding:'3px 8px', borderRadius:6,
+                          background: brandStyle.bg, color: brandStyle.fg,
+                          fontFamily:'Outfit,sans-serif', fontSize:10, fontWeight:900,
+                          letterSpacing:'.05em', pointerEvents:'none',
+                        }}
+                      >
+                        {brandStyle.label}
+                      </span>
+                    )}
+                  </div>
                   <ErrMsg msg={errs.cardNumber} />
+                </div>
+                <div style={{ gridColumn:'1/-1' }}>
+                  <label style={REG_LBL}>Cardholder Name <span style={{color:'#EF4444'}}>*</span></label>
+                  <input
+                    value={cardholderName}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (/^[a-zA-Z\s'-]*$/.test(v) || v === '') {
+                        setCardholderName(v);
+                        setErrs(p => ({ ...p, cardholderName: null }));
+                      }
+                    }}
+                    placeholder="Name as printed on card"
+                    style={REG_INP(errs.cardholderName)}
+                    onFocus={e => e.target.style.borderColor=PL}
+                    onBlur={e => e.target.style.borderColor=errs.cardholderName?'#EF4444':PBORDER}
+                  />
+                  <ErrMsg msg={errs.cardholderName} />
                 </div>
                 <div>
                   <label style={REG_LBL}>Expiry (MM/YY) <span style={{color:'#EF4444'}}>*</span></label>
@@ -1378,8 +1588,56 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
                   {BANKS.map((b) => <option key={b}>{b}</option>)}
                 </select>
                 <ErrMsg msg={errs.bankName} />
-                <p style={{ margin:'6px 0 0', fontSize:11, color:MUTED }}>
+                <button
+                  type="button"
+                  onClick={nextStep}
+                  disabled={busy}
+                  style={{
+                    marginTop:10, padding:'10px 16px', borderRadius:9, border:'none',
+                    background: busy ? '#94A3B8' : `linear-gradient(135deg,${PL},${PD})`,
+                    color:'#fff', fontFamily:'Outfit,sans-serif', fontSize:12, fontWeight:800,
+                    cursor: busy ? 'wait' : 'pointer',
+                    display:'inline-flex', alignItems:'center', gap:8,
+                  }}
+                >
+                  {busy ? 'Redirecting…' : '🏦 Proceed to Bank →'}
+                </button>
+                <p style={{ margin:'8px 0 0', fontSize:11, color:MUTED }}>
                   You&apos;ll be redirected to your bank&apos;s secure site to complete the payment.
+                </p>
+              </div>
+            )}
+
+            {paymentMethod === 'WALLET' && (
+              <div>
+                <label style={REG_LBL}>Select Wallet <span style={{color:'#EF4444'}}>*</span></label>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:8 }}>
+                  {WALLETS.map((w) => {
+                    const active = walletProvider === w.id;
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => { setWalletProvider(w.id); setErrs(v => ({ ...v, walletProvider:null })); }}
+                        aria-pressed={active}
+                        style={{
+                          padding:'10px 12px', borderRadius:10,
+                          border:`2px solid ${active ? PL : PBORDER}`,
+                          background: active ? PBG : '#fff',
+                          color: active ? P : DARK,
+                          fontSize:12, fontWeight:700, cursor:'pointer',
+                          display:'inline-flex', alignItems:'center', gap:8,
+                          justifyContent:'flex-start',
+                        }}
+                      >
+                        <span style={{ fontSize:16 }}>{w.icon}</span> {w.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <ErrMsg msg={errs.walletProvider} />
+                <p style={{ margin:'8px 0 0', fontSize:11, color:MUTED }}>
+                  We&apos;ll redirect you to the wallet provider to authorise the payment.
                 </p>
               </div>
             )}
@@ -1397,54 +1655,72 @@ export default function RegistrationModal({ onClose, onSuccess, onLoginAndEnter 
     );
   };
 
-  const Step5 = () => (
-    <div style={{ padding:'36px 28px', textAlign:'center' }}>
-      <div style={{ width:80, height:80, borderRadius:'50%', margin:'0 auto 20px',
-        background:'linear-gradient(135deg,#10B981,#059669)',
-        display:'flex', alignItems:'center', justifyContent:'center', fontSize:36,
-        boxShadow:'0 12px 36px rgba(16,185,129,0.38)',
-        animation:'lm-pop 0.6s cubic-bezier(.2,1.4,.3,1) both' }}>
-        ✅
+  const Step5 = () => {
+    const txnId          = createdOrgRef?.transactionId || null;
+    const nextBillingIso = createdOrgRef?.nextBillingDate || null;
+    const nextBillingFmt = nextBillingIso
+      ? new Date(nextBillingIso).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
+      : null;
+    const planLabelOut = livePlans.find(p => p.id === selectedPlan)?.label
+      || PLANS_REG.find(p => p.id === selectedPlan)?.label;
+    const methodLabel =
+      paymentMethod === 'UPI'        ? 'UPI'
+      : paymentMethod === 'CARD'     ? 'Card'
+      : paymentMethod === 'NETBANKING' ? 'Net Banking'
+      : paymentMethod === 'WALLET'   ? 'Wallet'
+      : '—';
+
+    return (
+      <div style={{ padding:'36px 28px', textAlign:'center' }}>
+        <div style={{ width:80, height:80, borderRadius:'50%', margin:'0 auto 20px',
+          background:'linear-gradient(135deg,#10B981,#059669)',
+          display:'flex', alignItems:'center', justifyContent:'center', fontSize:36,
+          boxShadow:'0 12px 36px rgba(16,185,129,0.38)',
+          animation:'lm-pop 0.6s cubic-bezier(.2,1.4,.3,1) both' }}>
+          ✅
+        </div>
+        <h2 style={{ fontFamily:'Outfit,sans-serif', fontSize:22, fontWeight:900, color:DARK, marginBottom:8 }}>
+          Payment Successful — Organization Created! 🎉
+        </h2>
+        <p style={{ fontSize:13, color:MID, lineHeight:1.7, marginBottom:20 }}>
+          Welcome to <strong>CorpGMS</strong>! Your organization <strong>{orgName}</strong> has been set up successfully.<br />
+          A verification email has been sent to <strong>{adminEmail}</strong>.
+        </p>
+        <div style={{ background:'#F0FDF4', border:'1.5px solid #A7F3D0', borderRadius:12, padding:'14px 18px', marginBottom:22, textAlign:'left' }}>
+          <p style={{ margin:0, fontSize:12, fontWeight:700, color:'#059669', marginBottom:8 }}>📋 Your Account Summary</p>
+          {[
+            ['Organization', orgName],
+            ['Plan Activated', planLabelOut],
+            ['Billing Cycle', billingCycle === 'yearly' ? 'Annual' : 'Monthly'],
+            ['Payment Method', methodLabel],
+            ...(txnId ? [['Transaction ID', txnId]] : []),
+            ...(nextBillingFmt ? [['Next Billing Date', nextBillingFmt]] : []),
+            ...(appliedCoupon ? [['Coupon Applied', `${appliedCoupon.code} · ${appliedCoupon.message || 'Discount active'}`]] : []),
+            ['Admin Email', adminEmail],
+            ['Workspace', `corpgms.com/${orgSlug}`],
+          ].map(([k, v]) => (
+            <div key={k} style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:MID, marginBottom:4, gap:12 }}>
+              <span style={{ fontWeight:600, flexShrink:0 }}>{k}:</span>
+              <span style={{ fontWeight:700, color:DARK, textAlign:'right', wordBreak:'break-all' }}>{v}</span>
+            </div>
+          ))}
+        </div>
+        <button onClick={() => {
+            const regUsers = JSON.parse(localStorage.getItem('cgms_registered_users') || '[]');
+            const me = regUsers[regUsers.length - 1];
+            if (me && onLoginAndEnter) { onLoginAndEnter({ ...me, role: 'director', id: 'director' }); }
+            else if (onSuccess) { onSuccess(); } else { onClose(); }
+          }} style={{
+          width:'100%', padding:'13px', borderRadius:11, border:'none',
+          background:`linear-gradient(135deg,${PL},${PD})`, color:'#fff',
+          fontFamily:'Outfit,sans-serif', fontWeight:800, fontSize:14, cursor:'pointer',
+          boxShadow:`0 6px 20px ${PL}55`,
+        }}>
+          🚀 Go to Dashboard
+        </button>
       </div>
-      <h2 style={{ fontFamily:'Outfit,sans-serif', fontSize:22, fontWeight:900, color:DARK, marginBottom:8 }}>
-        Payment Successful — Organization Created! 🎉
-      </h2>
-      <p style={{ fontSize:13, color:MID, lineHeight:1.7, marginBottom:20 }}>
-        Welcome to <strong>CorpGMS</strong>! Your organization <strong>{orgName}</strong> has been set up successfully.<br />
-        A verification email has been sent to <strong>{adminEmail}</strong>.
-      </p>
-      <div style={{ background:'#F0FDF4', border:'1.5px solid #A7F3D0', borderRadius:12, padding:'14px 18px', marginBottom:22, textAlign:'left' }}>
-        <p style={{ margin:0, fontSize:12, fontWeight:700, color:'#059669', marginBottom:8 }}>📋 Your Account Summary</p>
-        {[
-          ['Organization', orgName],
-          ['Plan', livePlans.find(p => p.id === selectedPlan)?.label || PLANS_REG.find(p => p.id === selectedPlan)?.label],
-          ['Billing Cycle', billingCycle === 'yearly' ? 'Annual' : 'Monthly'],
-          ['Payment Method', paymentMethod === 'UPI' ? 'UPI' : paymentMethod === 'CARD' ? 'Card' : paymentMethod === 'NETBANKING' ? 'Net Banking' : '—'],
-          ...(appliedCoupon ? [['Coupon Applied', `${appliedCoupon.code} · ${appliedCoupon.message || 'Discount active'}`]] : []),
-          ['Admin Email', adminEmail],
-          ['Workspace', `corpgms.com/${orgSlug}`],
-        ].map(([k, v]) => (
-          <div key={k} style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:MID, marginBottom:4 }}>
-            <span style={{ fontWeight:600 }}>{k}:</span>
-            <span style={{ fontWeight:700, color:DARK }}>{v}</span>
-          </div>
-        ))}
-      </div>
-      <button onClick={() => {
-          const regUsers = JSON.parse(localStorage.getItem('cgms_registered_users') || '[]');
-          const me = regUsers[regUsers.length - 1];
-          if (me && onLoginAndEnter) { onLoginAndEnter({ ...me, role: 'director', id: 'director' }); }
-          else if (onSuccess) { onSuccess(); } else { onClose(); }
-        }} style={{
-        width:'100%', padding:'13px', borderRadius:11, border:'none',
-        background:`linear-gradient(135deg,${PL},${PD})`, color:'#fff',
-        fontFamily:'Outfit,sans-serif', fontWeight:800, fontSize:14, cursor:'pointer',
-        boxShadow:`0 6px 20px ${PL}55`,
-      }}>
-        🚀 Enter Dashboard
-      </button>
-    </div>
-  );
+    );
+  };
 
   const Step4 = () => (
     <div style={{ padding:'36px 28px', textAlign:'center' }}>

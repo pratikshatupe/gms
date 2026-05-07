@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Mail, Eye, RotateCcw, Save, GripVertical, Plus, X } from 'lucide-react';
 import { Toast } from '../../components/ui';
+import { apiJson } from '../../api/http';
 import {
   EMAIL_TEMPLATE_KEY,
   generateAppointmentInviteEmail,
@@ -279,6 +280,40 @@ export default function EmailTemplates() {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
+  /* Pull persisted templates from the backend on mount and merge into
+   * localStorage so the editor and the server stay in sync across
+   * browsers / devices. Missing endpoint or network errors are silent —
+   * the local copy remains the source of truth in that case. */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiJson('/email-templates', { method: 'GET' });
+        const remote = res?.data?.templates || res?.templates || {};
+        if (cancelled || !remote || !Object.keys(remote).length) return;
+
+        const localRaw = localStorage.getItem(STORAGE_KEY);
+        const local = localRaw ? JSON.parse(localRaw) : {};
+        const merged = { ...local };
+        for (const k of Object.keys(remote)) {
+          const r = remote[k] || {};
+          merged[k] = {
+            ...(local[k] || {}),
+            subject: r.subject || (local[k]?.subject ?? ''),
+            body:    r.body    || (local[k]?.body    ?? ''),
+          };
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        const next = readTemplates();
+        setPersisted(next);
+        setDraft(next);
+      } catch {
+        /* offline / endpoint missing — keep local copy */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const meta = TEMPLATES_BY_KEY[activeKey];
   const current = draft[activeKey] || { subject: '', body: '', blocks: [], includeUnsubscribe: false };
 
@@ -379,6 +414,17 @@ export default function EmailTemplates() {
       setDraft(toSave);
       setPersisted(toSave);
       setToast({ type: 'success', msg: 'Email templates saved.' });
+
+      /* Also push to the backend so the next email dispatched server-side
+       * (notification.service.js → email.templates.js → loadDbTemplate)
+       * picks up the user's customisations. Failures are logged but
+       * don't undo the local save — the editor stays usable offline. */
+      apiJson('/email-templates', {
+        method: 'PUT',
+        body: JSON.stringify({ templates: toSave }),
+      }).catch((err) => {
+        console.warn('[email-templates] backend sync failed:', err && err.message);
+      });
     } catch {
       setToast({ type: 'error', msg: 'Could not save (storage quota or private mode).' });
     }

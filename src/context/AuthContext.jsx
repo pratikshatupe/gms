@@ -12,8 +12,26 @@ export const AuthProvider = ({ children }) => {
   /* ─── Normalise user object: guarantee `.role` lowercase ─── */
   const normaliseUser = (u) => {
     if (!u) return null;
-    const role = (u.role || u.id || '').toString().toLowerCase();
-    return { ...u, role };
+    /* Strip underscores so backend constants like `SUPER_ADMIN` collapse to
+       the `superadmin` form the RBAC matrix and route gates compare against. */
+    const role = (u.role || u.id || '').toString().toLowerCase().replace(/_/g, '');
+    const out = { ...u, role };
+    /* Back-fill legacy `organisationId` / `orgId` (used by Subscription,
+       NotificationContext, byOrg() etc.) from the backend's `organizationId`,
+       which may arrive populated as { _id, name, slug, isActive }. Without
+       this the tenant is never resolved for backend-authenticated users and
+       the Subscription page renders the empty-state card. */
+    const orgRaw = u.organizationId ?? u.organisationId ?? u.orgId ?? null;
+    if (orgRaw != null) {
+      const orgId = (typeof orgRaw === 'object') ? (orgRaw._id || orgRaw.id || '') : orgRaw;
+      if (!out.organisationId) out.organisationId = orgId;
+      if (!out.orgId)          out.orgId          = orgId;
+    }
+    const offRaw = u.officeId ?? null;
+    if (offRaw != null && (typeof offRaw === 'object')) {
+      out.officeId = offRaw._id || offRaw.id || '';
+    }
+    return out;
   };
 
   /* ─── Load user from localStorage (on app start) ─── */

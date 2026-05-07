@@ -180,6 +180,10 @@ async function dispatchAnnouncement({ title, message, recipients, channels, sent
             subject: `[CorpGMS] ${title}`,
             html: buildEmailHtml({ title, message, orgName }),
             text: `${title}\n\n${message}\n\n— CorpGMS Platform`,
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'X-Mailer': 'CorpGMS',
+            },
           });
           summary.emailsSent += 1;
         }

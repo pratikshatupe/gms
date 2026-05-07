@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Sparkles, CreditCard, Settings as SettingsIcon, Download, AlertTriangle,
-  CheckCircle2, Clock, X, Receipt, ChevronLeft, ChevronRight,
+  CheckCircle2, Clock, X, Receipt, ChevronLeft, ChevronRight, Loader2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useRole } from '../../context/RoleContext';
@@ -18,10 +18,53 @@ import {
   pricingFor, formatPrice, computeUsage, findOverLimits, gatewayFor, makeTxnId,
 } from '../../utils/subscriptionPricing';
 import { markReferralConverted } from '../../api/referralsApi';
+import { apiFetch, getAccessToken } from '../../api/http';
 import PlanCard from './PlanCard';
 import UsageMeters from './UsageMeters';
 import ChangePlanModal from './ChangePlanModal';
 import CancelSubscriptionModal from './CancelSubscriptionModal';
+
+/* Demo/staff localStorage roles bypass the backend API and read the org
+ * from MOCK_ORGANIZATIONS as before. Real backend-authenticated users
+ * (Director, Manager, SuperAdmin etc.) hit GET /subscriptions/my. */
+const LOCAL_ONLY_ROLES = new Set(['demo', 'staff']);
+
+/** Map a Subscription document from the backend into the org-shaped
+ *  object the existing TenantSubscription render path expects. Keeps
+ *  the rest of the component unchanged. */
+function subscriptionToOrg(sub, user) {
+  if (!sub) return null;
+  const rawOrg = sub.organisationId;
+  const orgId = (rawOrg && typeof rawOrg === 'object')
+    ? (rawOrg._id || rawOrg.id || '')
+    : (rawOrg || user?.organisationId || user?.orgId || '');
+
+  const apiStatus = String(sub.status || '').toLowerCase();
+  const status =
+    apiStatus === 'trial'     ? 'Trial' :
+    apiStatus === 'cancelled' ? 'Cancelled' :
+    apiStatus === 'past_due'  ? 'Past Due' :
+                                'Active';
+
+  return {
+    id:                    String(orgId || ''),
+    name:                  user?.organisationName || user?.organizationName || (rawOrg && typeof rawOrg === 'object' ? rawOrg.name : '') || '',
+    location:              user?.organisationLocation || '',
+    plan:                  sub.planName || 'Starter',
+    billingCycle:          sub.billingCycle === 'yearly' ? 'yearly' : 'monthly',
+    status,
+    currency:              sub.currency || 'INR',
+    startDate:             sub.startDate || null,
+    subscriptionStartedAt: sub.startDate || null,
+    endDate:               sub.endDate || null,
+    autoRenew:             sub.autoRenew !== false,
+    trialEndsAt:           status === 'Trial' ? sub.endDate : null,
+    mrr:                   sub.billingCycle === 'yearly'
+                             ? Math.round((Number(sub.amount) || 0) / 12)
+                             : (Number(sub.amount) || 0),
+    subscriptionTier:      sub.planName || 'Starter',
+  };
+}
 
 /**
  * TenantSubscription — Director / Manager view of the org's own
@@ -123,7 +166,74 @@ export default function TenantSubscription({ setActivePage }) {
   const [allSubscriptions]        = useCollection(STORAGE_KEYS.SUBSCRIPTIONS, []);
 
   const orgId = user?.organisationId || user?.orgId;
-  const org   = useMemo(() => (orgsAll || []).find((o) => o?.id === orgId) || null, [orgsAll, orgId]);
+
+  /* Decide which path resolves the current org's subscription:
+   *   - Demo / staff localStorage users keep the legacy MOCK_ORGANIZATIONS
+   *     lookup so the offline demo flow continues to work.
+   *   - Backend-authenticated users (anyone with a JWT in
+   *     cgms_access_token) fetch GET /api/v1/subscriptions/my, which is
+   *     authorised for SuperAdmin and Director server-side. */
+  const userRoleKey = String(user?.role || '').toLowerCase();
+  const hasBackendToken = typeof window !== 'undefined' && Boolean(getAccessToken());
+  const useBackendApi = hasBackendToken && !LOCAL_ONLY_ROLES.has(userRoleKey);
+
+  const [apiSub,     setApiSub]     = useState(null);
+  const [apiLoading, setApiLoading] = useState(useBackendApi);
+  const [apiError,   setApiError]   = useState(null);
+  const [reloadKey,  setReloadKey]  = useState(0);
+  const triggerReload = useCallback(() => {
+    setApiError(null);
+    setApiLoading(true);
+    setReloadKey((k) => k + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!useBackendApi) {
+      setApiSub(null);
+      setApiLoading(false);
+      setApiError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setApiLoading(true);
+    setApiError(null);
+
+    apiFetch('/subscriptions/my')
+      .then(async (res) => {
+        const text = await res.text();
+        let body = null;
+        try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+        if (cancelled) return;
+        if (res.status === 404) {
+          setApiSub(null);
+          return;
+        }
+        if (!res.ok) {
+          const msg = body?.message || body?.error?.message || `Request failed (${res.status}).`;
+          throw new Error(msg);
+        }
+        const sub = body?.data ?? body ?? null;
+        setApiSub(sub && typeof sub === 'object' ? sub : null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setApiSub(null);
+        setApiError(err?.message || 'Failed to load subscription.');
+      })
+      .finally(() => {
+        if (!cancelled) setApiLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [useBackendApi, reloadKey]);
+
+  const apiOrg = useMemo(() => subscriptionToOrg(apiSub, user), [apiSub, user]);
+  const localOrg = useMemo(
+    () => (orgsAll || []).find((o) => o?.id === orgId) || null,
+    [orgsAll, orgId],
+  );
+  const org = useBackendApi ? apiOrg : localOrg;
   const { settings: orgSettings } = useOrgSettings(user, { org });
   const currency = orgSettings?.currency || org?.currency || 'INR';
 
@@ -233,6 +343,41 @@ export default function TenantSubscription({ setActivePage }) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overLimits.length]);
+
+  if (useBackendApi && apiLoading) {
+    return (
+      <div style={{ padding: 28, background: T.bg, minHeight: '100vh', fontFamily: T.font }}>
+        <div style={{
+          ...card({ textAlign: 'center', padding: 40 }),
+          color: T.text,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
+        }}>
+          <Loader2 size={28} aria-hidden="true" style={{ color: T.purple, animation: 'spin 1s linear infinite' }} />
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Loading your subscription…</div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
+
+  if (useBackendApi && apiError) {
+    return (
+      <div style={{ padding: 28, background: T.bg, minHeight: '100vh', fontFamily: T.font }}>
+        <div style={{
+          ...card({ textAlign: 'center', padding: 40 }),
+          color: T.text,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
+        }}>
+          <AlertTriangle size={28} aria-hidden="true" style={{ color: T.red }} />
+          <div style={{ fontSize: 14, fontWeight: 700, color: T.navy }}>Couldn’t load subscription</div>
+          <div style={{ fontSize: 12, color: T.muted, maxWidth: 420 }}>{apiError}</div>
+          <button type="button" onClick={triggerReload} style={btn(T.purple)}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!org) {
     return (

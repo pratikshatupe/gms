@@ -1,5 +1,52 @@
 'use strict';
 
+let _EmailTemplateModel = null;
+function getEmailTemplateModel() {
+  if (_EmailTemplateModel) return _EmailTemplateModel;
+  try {
+    _EmailTemplateModel = require('../models/EmailTemplate');
+  } catch {
+    _EmailTemplateModel = null;
+  }
+  return _EmailTemplateModel;
+}
+
+/**
+ * loadDbTemplate(key) — fetch the user-customised template for `key` from
+ * the EmailTemplate collection. Returns `{ subject, body }` (or null when
+ * nothing has been saved yet so the caller falls through to the
+ * hard-coded default). Failures are swallowed: we never want a notification
+ * dispatch to crash because the templates table is unavailable.
+ */
+async function loadDbTemplate(key) {
+  const Model = getEmailTemplateModel();
+  if (!Model) return null;
+  try {
+    const row = await Model.findOne({ key }).lean();
+    if (!row) return null;
+    if (!row.subject && !row.body) return null;
+    return { subject: row.subject || '', body: row.body || '' };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * fillTokens(template, vars) — replace `{{token}}` placeholders in the
+ * supplied string with values from `vars`. Unknown tokens are left
+ * untouched so the recipient sees the placeholder rather than an empty
+ * gap (helps debugging template authoring).
+ */
+function fillTokens(template, vars) {
+  if (typeof template !== 'string' || !template) return template || '';
+  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, name) => {
+    if (vars && Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null) {
+      return String(vars[name]);
+    }
+    return `{{${name}}}`;
+  });
+}
+
 function formatDate(d) {
   try {
     return new Date(d).toLocaleString('en-GB', { hour12: false });
@@ -166,20 +213,33 @@ function ctaButton(href, label, color) {
 /* ─── Email event templates ───────────────────────────────────────────────── */
 
 module.exports = {
-  APPOINTMENT_CREATED: (p) => ({
-    subject: `Appointment confirmed: ${p.title || 'Visit'}`,
-    html: wrap(
-      'Your appointment is scheduled',
-      `<p style="margin:0 0 20px;">Hello,</p>
+  APPOINTMENT_CREATED: async (p) => {
+    const override = await loadDbTemplate('appointmentInvite');
+    const tokenVars = {
+      visitorName:   p.visitorName || '',
+      scheduledDate: p.scheduledAt ? new Date(p.scheduledAt).toLocaleDateString('en-GB') : '',
+      dateTime:      formatDate(p.scheduledAt),
+      purpose:       p.purpose || p.title || '-',
+      orgName:       p.officeName || '',
+    };
+    const subject = override?.subject
+      ? fillTokens(override.subject, tokenVars)
+      : `Appointment confirmed: ${p.title || 'Visit'}`;
+    const bodyHtml = override?.body
+      ? fillTokens(override.body, tokenVars)
+      : `<p style="margin:0 0 20px;">Hello,</p>
        <p style="margin:0 0 20px;">Your appointment has been successfully scheduled. Here are the details:</p>
        ${infoRow('Title', `<strong>${p.title || '-'}</strong>`)}
        ${infoRow('Date &amp; Time', `<strong>${formatDate(p.scheduledAt)}</strong>`)}
        <p style="margin:20px 0 0;font-size:13px;color:#64748b;">
          Please arrive on time and carry a valid ID.
-       </p>`
-    ),
-    text: `Appointment scheduled for ${formatDate(p.scheduledAt)} - ${p.title || ''}`,
-  }),
+       </p>`;
+    return {
+      subject,
+      html: wrap('Your appointment is scheduled', bodyHtml),
+      text: `Appointment scheduled for ${formatDate(p.scheduledAt)} - ${p.title || ''}`,
+    };
+  },
 
   APPOINTMENT_REMINDER: (p) => ({
     subject: `Reminder: upcoming appointment at ${formatDate(p.scheduledAt)}`,
@@ -347,11 +407,21 @@ module.exports = {
     text: `Your ${p.platformName || 'CorpGMS'} free trial ends in ${p.daysRemaining} day${p.daysRemaining === 1 ? '' : 's'}. Upgrade to keep your access.`,
   }),
 
-  APPOINTMENT_INVITATION: (p) => ({
-    subject: `Visit invitation: ${p.title || 'Appointment'} at ${p.officeName || 'our office'}`,
-    html: wrap(
-      'You are invited',
-      `<p style="margin:0 0 20px;">Hello ${p.visitorName || ''},</p>
+  APPOINTMENT_INVITATION: async (p) => {
+    const override = await loadDbTemplate('appointmentInvite');
+    const tokenVars = {
+      visitorName:   p.visitorName || '',
+      scheduledDate: p.scheduledAt ? new Date(p.scheduledAt).toLocaleDateString('en-GB') : '',
+      dateTime:      formatDate(p.scheduledAt),
+      purpose:       p.purpose || p.title || '-',
+      orgName:       p.officeName || '',
+    };
+    const subject = override?.subject
+      ? fillTokens(override.subject, tokenVars)
+      : `Visit invitation: ${p.title || 'Appointment'} at ${p.officeName || 'our office'}`;
+    const bodyHtml = override?.body
+      ? fillTokens(override.body, tokenVars)
+      : `<p style="margin:0 0 20px;">Hello ${p.visitorName || ''},</p>
        <p style="margin:0 0 20px;">
          <strong>${p.hostName || 'Your host'}</strong> has scheduled a visit for you.
          Here are the details:
@@ -363,10 +433,13 @@ module.exports = {
        ${p.instructions ? infoRow('Instructions', p.instructions) : ''}
        <p style="margin:20px 0 0;font-size:13px;color:#64748b;">
          Please arrive on time and carry a valid photo ID.
-       </p>`
-    ),
-    text: `Appointment scheduled for ${formatDate(p.scheduledAt)} at ${p.officeName || ''} with host ${p.hostName || ''}. Purpose: ${p.purpose || p.title || ''}.`,
-  }),
+       </p>`;
+    return {
+      subject,
+      html: wrap('You are invited', bodyHtml),
+      text: `Appointment at ${formatDate(p.scheduledAt)}`,
+    };
+  },
 
   CHECK_IN_VISITOR: (p) => ({
     subject: `Check-in confirmed at ${p.officeName || 'our office'}`,

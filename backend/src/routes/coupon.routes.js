@@ -16,8 +16,12 @@ router.post('/redeem', couponApplyLimiter, ctrl.redeem);
 /* ─── Authenticated admin endpoints below ─── */
 router.use(authenticate);
 
+/* GET / is open to every authenticated role — the controller filters
+ * what each role is allowed to see (SuperAdmin gets all, everyone else
+ * gets only active coupons applicable to their org). Mutations stay
+ * locked to SuperAdmin. */
+router.get('/',             ctrl.list);
 router.post('/',            isSuperAdmin, ctrl.create);
-router.get('/',             isSuperAdmin, ctrl.list);
 router.patch('/:id/toggle', isSuperAdmin, ctrl.toggle);
 router.delete('/:id',       isSuperAdmin, ctrl.remove);
 

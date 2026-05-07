@@ -157,8 +157,8 @@ async function sendWhatsApp({ to, body }) {
   return res.json();
 }
 
-function buildContent(event, payload) {
-  const email = emailTemplates[event] ? emailTemplates[event](payload) : null;
+async function buildContent(event, payload) {
+  const email = emailTemplates[event] ? await emailTemplates[event](payload) : null;
   const whatsapp = whatsappTemplates[event] ? whatsappTemplates[event](payload) : null;
   return { email, whatsapp };
 }
@@ -178,7 +178,7 @@ async function dispatch({
 }) {
   if (!recipients.length) return [];
 
-  const content = buildContent(event, payload);
+  const content = await buildContent(event, payload);
   const results = [];
 
   for (const recipient of recipients) {

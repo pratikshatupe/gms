@@ -410,10 +410,38 @@ export default function Login({ onBackToLanding, onLogin }) {
      * middleware recognises this token and grants superadmin scope. */
     try {
       const data = await backendLogin({ email, password });
-      if (data?.tokens) {
+      if (data?.tokens && data?.user) {
+        /* Real backend session — persist tokens AND honour the user the API
+           returned. Previously the user object was discarded and the flow
+           fell through to localStorage matching, so a real DB user with no
+           localStorage twin saw the frontend's "Invalid credentials" message
+           even though the API succeeded. We also map the backend's
+           `organizationId` / `officeId` (which may arrive populated) onto
+           the legacy `organisationId` / `orgId` fields the rest of the app
+           still reads from, so the Subscription page resolves the tenant. */
         setAuthTokens(data.tokens);
-      } else if ((email || '').toLowerCase() === 'superadmin@corpgms.com'
-              || (email || '').toLowerCase() === 'admin@example.com') {
+        const u = data.user;
+        const orgRaw = u.organizationId ?? u.organisationId ?? null;
+        const orgId  = orgRaw && typeof orgRaw === 'object' ? (orgRaw._id || orgRaw.id || '') : (orgRaw || '');
+        const offRaw = u.officeId ?? null;
+        const officeId = offRaw && typeof offRaw === 'object' ? (offRaw._id || offRaw.id || '') : (offRaw || '');
+        const role = String(u.role || '').toLowerCase().replace(/_/g, '');
+        const normalised = {
+          ...u,
+          id:             role,
+          role,
+          organisationId: orgId,
+          orgId,
+          officeId,
+        };
+        if (rememberMe) localStorage.setItem(STORAGE_KEYS.REMEMBER, JSON.stringify({ email }));
+        else localStorage.removeItem(STORAGE_KEYS.REMEMBER);
+        setLoading(false);
+        onLogin(normalised);
+        return;
+      }
+      if ((email || '').toLowerCase() === 'superadmin@corpgms.com'
+       || (email || '').toLowerCase() === 'admin@example.com') {
         try { localStorage.setItem('cgms_access_token', 'super-admin-demo-token'); } catch {}
       }
     } catch {

@@ -5,6 +5,10 @@ const asyncHandler  = require('../utils/asyncHandler');
 const ApiResponse   = require('../utils/ApiResponse');
 const ApiError      = require('../utils/ApiError');
 const couponService = require('../services/coupon.service');
+const { normaliseRole } = require('../middlewares/role.middleware');
+const { ROLES }     = require('../config/constants');
+
+const SUPER_ADMIN_KEY = normaliseRole(ROLES.SUPER_ADMIN);
 
 /* Coerce whatever the auth middleware put on `req.user._id` / `req.auth.userId`
  * into a value that Mongoose can store in an ObjectId-typed field. If the
@@ -70,7 +74,12 @@ const create = async (req, res) => {
 };
 
 const list = asyncHandler(async (req, res) => {
-  const { items, meta } = await couponService.listCoupons(req.query);
+  const role = normaliseRole(req.user && req.user.role);
+  const isSuper = role === SUPER_ADMIN_KEY;
+  /* Non-SuperAdmins only ever see active coupons. SuperAdmin keeps the
+   * full admin view and may filter via ?isActive= in the query string. */
+  const query = isSuper ? req.query : { ...req.query, isActive: 'true' };
+  const { items, meta } = await couponService.listCoupons(query);
   return ApiResponse.success(res, { data: items, meta });
 });
 

@@ -21,35 +21,61 @@ async function login({ email, password, organizationSlug }) {
     query.organizationId = org._id;
   }
 
-  const user = await User.findOne(query).select('+password').populate('organizationId', 'name slug isActive');
-  if (!user) throw ApiError.unauthorized('Invalid credentials.');
-  if (!user.isActive) throw ApiError.forbidden('Account is disabled.');
+  /* The User schema has a UNIQUE index on (organizationId, email), so the same
+     email may legitimately exist in multiple tenants. `findOne({email})` returns
+     whichever Mongo orders first, which produced spurious 401s when valid creds
+     belonged to a different tenant. When no organizationSlug is supplied we
+     fetch every match and pick the one whose password verifies. */
+  const candidates = organizationSlug
+    ? await User.find(query).select('+password').populate('organizationId', 'name slug isActive')
+    : await User.find({ email: email.toLowerCase() }).select('+password').populate('organizationId', 'name slug isActive');
 
-  /* Bug 3 — lockout: refuse the login while the lock window is in effect. */
-  if (user.lockedUntil && user.lockedUntil > new Date()) {
-    const minutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
-    throw ApiError.forbidden(`Account is temporarily locked. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`);
+  if (!candidates.length) throw ApiError.unauthorized('Invalid credentials.');
+
+  const isSelectable = (u) => {
+    if (!u.isActive) return false;
+    if (u.lockedUntil && u.lockedUntil > new Date()) return false;
+    if (u.role !== ROLES.SUPER_ADMIN && u.organizationId && u.organizationId.isActive === false) return false;
+    return true;
+  };
+
+  let user = null;
+  for (const candidate of candidates) {
+    if (!isSelectable(candidate)) continue;
+    if (candidate.password && await comparePassword(password, candidate.password)) {
+      user = candidate;
+      break;
+    }
   }
 
-  if (
-    user.role !== ROLES.SUPER_ADMIN &&
-    user.organizationId &&
-    user.organizationId.isActive === false
-  ) {
-    throw ApiError.forbidden('Organization is disabled.');
-  }
+  if (!user) {
+    /* Surface the precise failure reason against the deterministic first
+       candidate so account-state errors (disabled / locked / org disabled)
+       still take precedence over a generic Invalid credentials. */
+    const probe = candidates[0];
+    if (!probe.isActive) throw ApiError.forbidden('Account is disabled.');
+    if (probe.lockedUntil && probe.lockedUntil > new Date()) {
+      const minutes = Math.ceil((probe.lockedUntil.getTime() - Date.now()) / 60000);
+      throw ApiError.forbidden(`Account is temporarily locked. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`);
+    }
+    if (
+      probe.role !== ROLES.SUPER_ADMIN &&
+      probe.organizationId &&
+      probe.organizationId.isActive === false
+    ) {
+      throw ApiError.forbidden('Organization is disabled.');
+    }
 
-  const ok = await comparePassword(password, user.password);
-  if (!ok) {
-    /* Bug 3 — increment failure counter; lock after MAX_LOGIN_ATTEMPTS. */
-    user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
-    if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
-      user.lockedUntil = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000);
-      user.failedLoginAttempts = 0;
-      await user.save();
+    /* Increment failure counter on the deterministic first candidate so
+       lockout still works under the multi-tenant shadow-account scenario. */
+    probe.failedLoginAttempts = (probe.failedLoginAttempts || 0) + 1;
+    if (probe.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+      probe.lockedUntil = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000);
+      probe.failedLoginAttempts = 0;
+      await probe.save();
       throw ApiError.forbidden(`Too many failed attempts. Account locked for ${LOCKOUT_MINUTES} minutes.`);
     }
-    await user.save();
+    await probe.save();
     throw ApiError.unauthorized('Invalid credentials.');
   }
 

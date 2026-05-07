@@ -29,7 +29,25 @@
       "Bash(node --check src/pages/settings/EmailTemplates.jsx)",
       "Bash(node -e \"const p=require\\('@babel/parser'\\); const fs=require\\('fs'\\); const src=fs.readFileSync\\('src/pages/settings/EmailTemplates.jsx','utf8'\\); try { p.parse\\(src, {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK EmailTemplates'\\); } catch \\(e\\) { console.log\\('FAIL EmailTemplates:', e.message\\); }\")",
       "Bash(node -e \"const p=require\\('@babel/parser'\\); const fs=require\\('fs'\\); const src=fs.readFileSync\\('src/pages/Subscription/index.jsx','utf8'\\); try { p.parse\\(src, {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK Subscription'\\); } catch \\(e\\) { console.log\\('FAIL Subscription:', e.message\\); }\")",
-      "Bash(node -e \"const p=require\\('@babel/parser'\\); const fs=require\\('fs'\\); const src=fs.readFileSync\\('src/pages/Subscription/index.jsx','utf8'\\); try { const ast=p.parse\\(src, {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK lines:', src.split\\('\\\\n'\\).length\\); } catch \\(e\\) { console.log\\('FAIL:', e.message\\); }\")"
+      "Bash(node -e \"const p=require\\('@babel/parser'\\); const fs=require\\('fs'\\); const src=fs.readFileSync\\('src/pages/Subscription/index.jsx','utf8'\\); try { const ast=p.parse\\(src, {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK lines:', src.split\\('\\\\n'\\).length\\); } catch \\(e\\) { console.log\\('FAIL:', e.message\\); }\")",
+      "Bash(node --check \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\backend\\\\src\\\\templates\\\\email.templates.js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\backend\\\\src\\\\services\\\\notification.service.js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\backend\\\\src\\\\routes\\\\emailTemplate.routes.js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\backend\\\\src\\\\models\\\\EmailTemplate.js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\backend\\\\src\\\\services\\\\Announcement.service .js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\backend\\\\src\\\\routes\\\\index.js\")",
+      "Bash(node --check backend/src/services/auth.service.js)",
+      "Bash(npx --yes esbuild --loader=jsx --bundle=false src/pages/Login.jsx)",
+      "Bash(npx --yes esbuild --loader=jsx --bundle=false src/context/AuthContext.jsx)",
+      "Bash(node node_modules/esbuild/bin/esbuild --loader=jsx --bundle=false \"src/pages/Login.jsx\")",
+      "Bash(node node_modules/esbuild/bin/esbuild --loader:.jsx=jsx --bundle=false \"src/pages/Login.jsx\")",
+      "Bash(node node_modules/esbuild/bin/esbuild --loader:.jsx=jsx --bundle=false \"src/context/AuthContext.jsx\")",
+      "Bash(node --check src/pages/Landing/RegistrationModal.jsx)",
+      "Bash(npx --yes esbuild src/pages/Landing/RegistrationModal.jsx --loader=jsx --bundle=false --log-level=warning)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(npx --yes esbuild src/pages/Landing/RegistrationModal.jsx --loader=jsx --bundle=false)",
+      "Bash(npx --yes esbuild --loader=jsx --bundle=false)",
+      "Bash(npx --yes esbuild --loader=jsx)"
     ]
   }
 }

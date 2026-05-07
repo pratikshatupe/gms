@@ -22,6 +22,7 @@ const referrals       = require('./referral.routes');
 const chatbot         = require('./chatboat.routes');
 const announcements   = require('./Announcement.routes');
 const plans           = require('./plan.routes');
+const emailTemplates  = require('./emailTemplate.routes');
 
 const router = express.Router();
 
@@ -72,5 +73,6 @@ router.use('/coupons',          coupons);
 router.use('/referrals',        referrals);
 router.use('/chatbot',          chatbot);
 router.use('/announcements',    announcements);
+router.use('/email-templates',  emailTemplates);
 
 module.exports = router;

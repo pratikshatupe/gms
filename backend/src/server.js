@@ -10,6 +10,7 @@ const { hashPassword } = require('./utils/password');
 const User = require('./models/User');
 const { ROLES } = require('./config/constants');
 const { seedCoupons } = require('./services/seedCoupons.service');
+const { resetTransporter } = require('./services/notification.service');
 
 async function ensureSuperAdmin() {
   const exists = await User.findOne({ role: ROLES.SUPER_ADMIN, email: env.superAdmin.email.toLowerCase() });
@@ -29,6 +30,12 @@ async function bootstrap() {
   await connectDB();
   await ensureSuperAdmin();
   await seedCoupons();
+
+  /* Bug 3 fix — clear any cached SMTP transporter from a previous boot
+   * (test runs, hot reload, dev nodemon restarts) so the next sendMail
+   * call re-creates the transporter against the freshly loaded env.
+   * Idempotent: a no-op when nothing has been cached yet. */
+  resetTransporter();
 
   if (env.isProd || process.env.ENABLE_CRON === 'true') {
     startReminderJob();

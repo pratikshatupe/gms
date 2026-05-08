@@ -15,6 +15,14 @@ const paymentSchema = new mongoose.Schema(
     },
     status:        { type: String, enum: ['SUCCESS', 'FAILED', 'PENDING'], default: 'SUCCESS' },
     paidAt:        { type: Date, default: Date.now },
+
+    /* Razorpay audit trail — populated by the verifyAndActivate flow.
+     * Kept optional so legacy / manual / non-Razorpay payments still
+     * persist without these fields. The signature is stored so a
+     * support ticket can re-verify the payment integrity if needed. */
+    razorpayOrderId:   { type: String, trim: true, default: null },
+    razorpayPaymentId: { type: String, trim: true, default: null },
+    razorpaySignature: { type: String, trim: true, default: null },
   },
   { _id: true, timestamps: true }
 );

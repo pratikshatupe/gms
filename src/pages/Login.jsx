@@ -4,6 +4,7 @@ import { STORAGE_KEYS } from '../store';
 import { safeGet } from '../utils/storage';
 import { MOCK_STAFF } from '../data/mockData';
 import { sha256Hex } from '../utils/passwordValidation';
+import { validateEmail, validatePasswordStrict, sanitizeEmail } from '../utils/validators';
 import { addAuditLog } from '../utils/auditLogger';
 import { backendLogin, clearAuthTokens, setAuthTokens } from '../api/http';
 
@@ -148,8 +149,8 @@ function ForgotPasswordModal({ onClose }) {
   /* Step 1 */
   const handleSendOtp = () => {
     setErr('');
-    if(!fpEmail.trim()) return setErr('Email ID is required.');
-    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fpEmail)) return setErr('Enter a valid Email ID.');
+    const emailErr = validateEmail(fpEmail, { label: 'Email ID' });
+    if (emailErr) return setErr(emailErr);
     setLoading(true);
     setTimeout(()=>{
       const found = findAccountByEmail(fpEmail.trim());
@@ -203,9 +204,11 @@ function ForgotPasswordModal({ onClose }) {
 
   const handleResetPassword = async () => {
     setErr('');
-    if(!newPass) return setErr('New password is required.');
-    if(newPass.length<6) return setErr('Password must be at least 6 characters.');
-    if(newPass !== confPass) return setErr('Passwords do not match.');
+    /* Phase 2 spec: 8+ with upper/lower/digit/special. The strength
+     * meter above is a hint only — this is the hard gate. */
+    const pwErr = validatePasswordStrict(newPass, { label: 'New password' });
+    if (pwErr) return setErr(pwErr);
+    if (newPass !== confPass) return setErr('Passwords do not match.');
     setLoading(true);
     await saveNewPassword(fpEmail.trim(), newPass, account?.source);
     try { addAuditLog({ userName:fpEmail, role:'unknown', action:'PASSWORD_RESET', module:'Auth', description:`Password reset via OTP for ${fpEmail}.`, orgId:'' }); } catch {}
@@ -299,7 +302,7 @@ function ForgotPasswordModal({ onClose }) {
               <label style={{ fontSize:12, fontWeight:700, color:'#5a4bd1', textTransform:'uppercase', letterSpacing:'.08em', display:'block', marginBottom:7 }}>New Password *</label>
               <div style={{ position:'relative', marginBottom:4 }}>
                 <KeyRound size={14} style={{ position:'absolute', left:14, top:'50%', transform:'translateY(-50%)', opacity:.38, pointerEvents:'none' }} />
-                <input className="inp-field" type={showNew?'text':'password'} value={newPass} onChange={e=>{setNewPass(e.target.value);setErr('');}} placeholder="New password (min 6 chars)" style={{ paddingLeft:44, paddingRight:44 }} autoFocus />
+                <input className="inp-field" type={showNew?'text':'password'} value={newPass} onChange={e=>{setNewPass(e.target.value);setErr('');}} placeholder="Min 8 chars · upper · lower · number · symbol" style={{ paddingLeft:44, paddingRight:44 }} autoFocus />
                 <button className="eye-btn" type="button" onClick={()=>setShowNew(p=>!p)}>{showNew?<EyeOff size={15}/>:<Eye size={15}/>}</button>
               </div>
               {newPass && (
@@ -383,12 +386,18 @@ export default function Login({ onBackToLanding, onLogin }) {
   },[locked,lockTimer]);
 
   const validate = () => {
-    const e={};
-    if(!email.trim()) e.email='Email ID is required.';
-    else if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) e.email='Please enter a valid Email ID.';
-    if(!password.trim()) e.password='Password is required.';
-    else if(password.length<6) e.password='Password must be at least 6 characters.';
-    setErrors(e); return Object.keys(e).length===0;
+    const e = {};
+    /* Email uses the shared validator so format rules stay consistent
+     * across Login / ForgotPassword / Registration. */
+    const emailErr = validateEmail(email, { label: 'Email ID' });
+    if (emailErr) e.email = emailErr;
+    /* Login keeps the lenient min-6 rule for back-compat with demo
+     * accounts. The strict 8+ rule is enforced on password CREATION
+     * paths (ForgotPassword reset, ChangePassword, Registration). */
+    if (!password.trim()) e.password = 'Password is required.';
+    else if (password.length < 6) e.password = 'Password must be at least 6 characters.';
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
 
   const handleSubmit = async (ev) => {
@@ -586,7 +595,7 @@ export default function Login({ onBackToLanding, onLogin }) {
               <label style={{ fontSize:12, fontWeight:700, color:'#5a4bd1', textTransform:'uppercase', letterSpacing:'.08em', display:'block', marginBottom:7 }}>Email ID *</label>
               <div style={{ position:'relative' }}>
                 <span style={{ position:'absolute', left:14, top:'50%', transform:'translateY(-50%)', fontSize:15, opacity:.38, pointerEvents:'none' }}>✉</span>
-                <input ref={emailRef} className={`inp-field${errors.email?' err':''}`} type="email" value={email} onChange={e=>{setEmail(e.target.value);setErrors(p=>({...p,email:undefined,general:undefined}));}} placeholder="Enter your Email ID" maxLength={120} autoComplete="email" />
+                <input ref={emailRef} className={`inp-field${errors.email?' err':''}`} type="email" value={email} onChange={e=>{setEmail(sanitizeEmail(e.target.value));setErrors(p=>({...p,email:undefined,general:undefined}));}} placeholder="Enter your Email ID" maxLength={120} autoComplete="email" />
               </div>
               {errors.email&&<span style={{ fontSize:12, color:'#EF4444', display:'block', marginTop:5, fontWeight:500 }}>{errors.email}</span>}
             </div>

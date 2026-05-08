@@ -5,9 +5,12 @@ import {
   MailPlus, UserCog, RefreshCcw,
 } from 'lucide-react';
 import { useCollection, STORAGE_KEYS } from '../../store';
-import { MOCK_STAFF, MOCK_OFFICES } from '../../data/mockData';
+import { MOCK_STAFF, MOCK_OFFICES, MOCK_ORGANIZATIONS } from '../../data/mockData';
 import { Toast } from '../../components/ui';
 import ResetPasswordModal from './ResetPasswordModal';
+import { generateStaffInviteEmail, previewEmail } from '../../utils/emailTemplates';
+import { generateTempPassword } from '../../utils/requestValidation';
+import { addAuditLog } from '../../utils/auditLogger';
 
 /**
  * StaffDetailPage — Overview tab full + 3 placeholder tabs.
@@ -145,7 +148,44 @@ export default function StaffDetailPage({
           isSelf={isSelf}
           selfResetNote={selfResetNote}
           onEdit={onEdit}
-          onResendInvite={() => showToast(`Invitation email preview logged to console for ${staffRow.fullName || staffRow.name}.`)}
+          onResendInvite={async () => {
+            const to = staffRow.emailId || staffRow.email;
+            if (!to) {
+              showToast('No email on file for this staff member — cannot send invite.', 'error');
+              return;
+            }
+            try {
+              const org = (MOCK_ORGANIZATIONS || []).find(
+                (o) => o?.id === (staffRow.orgId || currentUser?.organisationId),
+              );
+              const tempPwd = generateTempPassword ? generateTempPassword() : 'Welcome@123';
+              const envelope = generateStaffInviteEmail(staffRow, tempPwd, org);
+              const result = await previewEmail({ ...envelope, to });
+              if (result && result.ok) {
+                addAuditLog({
+                  userName: currentUser?.name || 'Unknown',
+                  role: (currentUser?.role || '').toString(),
+                  action: 'EMAIL',
+                  module: 'Staff',
+                  description: `Resent invite to ${to} for ${staffRow.fullName || staffRow.name}.`,
+                  orgId: staffRow.orgId,
+                });
+                showToast(`Invitation email sent to ${to}.`);
+              } else {
+                const reason = result?.error || 'Email dispatch failed.';
+                showToast(
+                  reason.startsWith('network:')
+                    ? 'Could not reach the email server. Make sure the backend is running on port 5000.'
+                    : `Email could not be sent: ${reason}`,
+                  'error',
+                );
+              }
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error('[ResendInvite/Staff] failed:', err);
+              showToast(err?.message || 'Email could not be sent.', 'error');
+            }
+          }}
           onResetPassword={() => {
             if (isSelf) {
               showToast('Self-service password reset ships in Module 11.', 'info');

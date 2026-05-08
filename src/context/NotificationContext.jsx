@@ -4,8 +4,15 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
+import {
+  listMyAnnouncements,
+  dismissAnnouncement as apiDismissAnnouncement,
+  deleteAnnouncementGlobal as apiDeleteAnnouncementGlobal,
+} from '../api/announcementsApi';
+import { getAccessToken } from '../api/http';
 
 /**
  * NotificationContext — single source of truth for the notification log.
@@ -52,21 +59,25 @@ export const NOTIFICATION_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; /* 90 days */
 
 /* Canonical trigger types — Module 7 Decision 2. */
 export const NOTIFICATION_TYPES = Object.freeze({
-  APPOINTMENT_APPROVED:  'appointment_approved',
-  APPOINTMENT_CANCELLED: 'appointment_cancelled',
-  WALKIN_ARRIVED:        'walkin_arrived',
-  VIP_PENDING:           'vip_pending',
-  REPORT_READY:          'report_ready',
-  SYSTEM_ALERT:          'system_alert',
+  APPOINTMENT_APPROVED:    'appointment_approved',
+  APPOINTMENT_CANCELLED:   'appointment_cancelled',
+  APPOINTMENT_CHECKED_OUT: 'appointment_checked_out',
+  APPOINTMENT_REMINDER:    'appointment_reminder',
+  WALKIN_ARRIVED:          'walkin_arrived',
+  VIP_PENDING:             'vip_pending',
+  REPORT_READY:            'report_ready',
+  SYSTEM_ALERT:            'system_alert',
 });
 
 const DEFAULT_ICON_FOR_TYPE = {
-  appointment_approved:  '✅',
-  appointment_cancelled: '❌',
-  walkin_arrived:        '🚶',
-  vip_pending:           '⭐',
-  report_ready:          '📊',
-  system_alert:          '🚨',
+  appointment_approved:    '✅',
+  appointment_cancelled:   '❌',
+  appointment_checked_out: '🏁',
+  appointment_reminder:    '⏰',
+  walkin_arrived:          '🚶',
+  vip_pending:             '⭐',
+  report_ready:            '📊',
+  system_alert:            '🚨',
   /* Legacy — kept so pre-Module-7 rows still render with a sensible glyph. */
   appointment: '📅',
   service:     '☕',
@@ -170,6 +181,38 @@ function loadFromStorage() {
   }
 }
 
+/* Map a backend announcement payload (from /announcements/my) into the
+ * notification shape the rest of the UI expects. The id is stable on
+ * the announcement id so repeated polls dedupe instead of duplicating.
+ * Severity is derived from the announcement type. */
+function announcementToEntry(a) {
+  if (!a || !a.id) return null;
+  const type = a.type === 'urgent'  ? 'system_alert'
+             : a.type === 'warning' ? 'system_alert'
+             : 'system_alert';
+  const severity = a.type === 'urgent'  ? 'critical'
+                 : a.type === 'warning' ? 'warning'
+                 : 'info';
+  return {
+    id:               `ann-${a.id}`,
+    announcementId:   a.id,
+    kind:             'announcement',  /* discriminator for backend-aware handlers */
+    title:            a.title || 'Announcement',
+    message:          a.body || '',
+    type,
+    severity,
+    icon:             '📢',
+    link:             { page: 'notifications' },
+    actorName:        a.createdByName || 'Super Admin',
+    roles:            [],   /* visibility is enforced server-side */
+    staffId:          null,
+    orgId:            null, /* server-side filtered already */
+    timestamp:        a.createdAt || new Date().toISOString(),
+    isRead:           Boolean(a.read),
+    deliveryChannels: a.channels || { inApp: true, email: false, sms: false },
+  };
+}
+
 export function NotificationProvider({ children }) {
   const [notifications, setNotifications] = useState(loadFromStorage);
 
@@ -183,6 +226,104 @@ export function NotificationProvider({ children }) {
       /* Out of quota or disabled — non-fatal. */
     }
   }, [notifications]);
+
+  /* ─────────────────────────────────────────────────────────────────
+   * Backend announcement sync. Polls /announcements/my on mount and
+   * every 60s while the tab is visible. The fetched announcements are
+   * merged into the same notifications array (deduped by stable id
+   * `ann-<announcementId>`), so they appear in the existing feed and
+   * are filtered/grouped by the same UI helpers.
+   *
+   * Guards (added to stop the API being hammered):
+   *   - Skip entirely when no access token is present (logged-out user).
+   *   - Dedupe overlapping in-flight fetches so focus + tick can't stack.
+   *   - The setup effect runs ONCE per provider mount (empty deps); a ref
+   *     bridges to the latest `refreshAnnouncements` to avoid stale
+   *     closures while keeping the interval singular.
+   * ───────────────────────────────────────────────────────────────── */
+  const lastAnnouncementSyncRef = useRef(0);
+  const inFlightRef = useRef(false);
+
+  const refreshAnnouncements = useCallback(async () => {
+    /* Don't call the API if the user isn't logged in / no token. */
+    if (!getAccessToken()) return;
+    /* Coalesce overlapping calls (focus + 60s tick + login burst). */
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      let remote;
+      try {
+        remote = await listMyAnnouncements();
+      } catch {
+        /* 401 / network — silently keep local state. */
+        return;
+      }
+      if (!Array.isArray(remote) || remote.length === 0) {
+        /* Strip any stale ann-* rows that no longer come back from server
+         * (e.g. globally deleted by Super Admin). */
+        setNotifications((prev) =>
+          prev.some((n) => n.kind === 'announcement')
+            ? prev.filter((n) => n.kind !== 'announcement')
+            : prev
+        );
+        return;
+      }
+      const remoteEntries = remote
+        .map(announcementToEntry)
+        .filter((e) => e && !e.dismissed);
+
+      setNotifications((prev) => {
+        /* Drop the previous announcement-rows; keep everything else. */
+        const kept = prev.filter((n) => n.kind !== 'announcement');
+        /* Preserve `isRead` from the previous local row when available so
+         * that toggling read locally doesn't get overwritten by the next
+         * poll. */
+        const prevById = new Map(
+          prev.filter((n) => n.kind === 'announcement').map((n) => [n.id, n])
+        );
+        const merged = remoteEntries.map((e) => {
+          const old = prevById.get(e.id);
+          return old ? { ...e, isRead: old.isRead || e.isRead } : e;
+        });
+        return applyRetention([...merged, ...kept]);
+      });
+      lastAnnouncementSyncRef.current = Date.now();
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, []);
+
+  /* Bridge ref so the setup effect below can stay on empty-deps and still
+   * call the latest function — guarantees exactly one interval per mount. */
+  const refreshRef = useRef(refreshAnnouncements);
+  useEffect(() => { refreshRef.current = refreshAnnouncements; }, [refreshAnnouncements]);
+
+  useEffect(() => {
+    /* Initial fetch — no-op if no token; will run on next focus/tick once
+     * login completes. */
+    refreshRef.current();
+
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      refreshRef.current();
+    }, 60_000);
+
+    const onFocus = () => refreshRef.current();
+    window.addEventListener('focus', onFocus);
+
+    /* Pick up a fresh login from another tab (storage event only fires
+     * cross-tab, never in the writing tab). */
+    const onStorageAuth = (e) => {
+      if (e.key === 'cgms_access_token' && e.newValue) refreshRef.current();
+    };
+    window.addEventListener('storage', onStorageAuth);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('storage', onStorageAuth);
+    };
+  }, []);
 
   /* Same-tab sync for writes that bypass the context. */
   useEffect(() => {
@@ -265,6 +406,39 @@ export function NotificationProvider({ children }) {
     setNotifications([]);
   }, []);
 
+  /* Backend-aware dismiss for an announcement entry. Removes the row
+   * from the local state and persists the dismissal to the server so
+   * the next poll doesn't re-add it. Falls back to local-only removal
+   * on network/401 failure. */
+  const dismissAnnouncementEntry = useCallback(async (entry) => {
+    if (!entry) return;
+    const announcementId = entry.announcementId
+      || (entry.id?.startsWith('ann-') ? entry.id.slice(4) : null);
+    /* Optimistic local removal. */
+    setNotifications((prev) => prev.filter((n) => n.id !== entry.id));
+    if (!announcementId) return;
+    try { await apiDismissAnnouncement(announcementId); } catch { /* keep local removal */ }
+  }, []);
+
+  /* Super-Admin only: globally delete an announcement. Removes from
+   * every user's feed. Caller must confirm before invoking. */
+  const deleteAnnouncementEntryGlobal = useCallback(async (entry) => {
+    if (!entry) return;
+    const announcementId = entry.announcementId
+      || (entry.id?.startsWith('ann-') ? entry.id.slice(4) : null);
+    setNotifications((prev) => prev.filter((n) => n.id !== entry.id));
+    if (!announcementId) return;
+    try { await apiDeleteAnnouncementGlobal(announcementId); }
+    catch (err) {
+      /* Caller can decide to surface this; we just log so the local
+       * state stays consistent. The next sync will re-add the row if
+       * the server delete didn't actually take effect. */
+      // eslint-disable-next-line no-console
+      console.warn('Global announcement delete failed:', err?.message || err);
+      throw err;
+    }
+  }, []);
+
   /* Derived count — cheap, memoized, and exposed so consumers never
      reimplement the filter expression (which is how Sidebar/Topbar drift). */
   const unreadCount = useMemo(
@@ -282,7 +456,15 @@ export function NotificationProvider({ children }) {
     deleteNotification: removeNotification,
     clearRead,
     clearAll,
-  }), [notifications, unreadCount, addNotification, markAsRead, markAllAsRead, removeNotification, clearRead, clearAll]);
+    /* Backend-aware actions for announcements. */
+    refreshAnnouncements,
+    dismissAnnouncementEntry,
+    deleteAnnouncementEntryGlobal,
+  }), [
+    notifications, unreadCount, addNotification, markAsRead, markAllAsRead,
+    removeNotification, clearRead, clearAll,
+    refreshAnnouncements, dismissAnnouncementEntry, deleteAnnouncementEntryGlobal,
+  ]);
 
   return (
     <NotificationContext.Provider value={value}>

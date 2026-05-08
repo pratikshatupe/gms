@@ -3,6 +3,7 @@ import { ArrowRight, Loader2, X, AlertTriangle, CreditCard, ShieldCheck, Users }
 import {
   pricingFor, formatPrice, gatewayFor, planLimit, findOverLimits, makeTxnId,
 } from '../../utils/subscriptionPricing';
+import { apiFetch } from '../../api/http';
 
 /**
  * ChangePlanModal — switch plan flow (Module 9 Decision 10).
@@ -50,8 +51,9 @@ export default function ChangePlanModal({
 }) {
   const [cycle, setCycle]   = useState(defaultCycle);
   const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  useEffect(() => { if (open) { setCycle(defaultCycle); setSaving(false); } }, [open, defaultCycle]);
+  useEffect(() => { if (open) { setCycle(defaultCycle); setSaving(false); setErrorMsg(''); } }, [open, defaultCycle]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -129,34 +131,137 @@ export default function ChangePlanModal({
 
   /* ── Standard upgrade / downgrade / cycle-change branch ── */
 
+  /* ───────────────────────────────────────────────────────────────
+   *   Razorpay upgrade flow.
+   *
+   *   1. Hit POST /subscriptions/create-order to mint a Razorpay
+   *      Order on the backend (the only place that knows the key
+   *      secret). Backend returns { orderId, amount, keyId }.
+   *   2. Open Razorpay Checkout via window.Razorpay; the SDK was
+   *      loaded from index.html so it should be globally available.
+   *   3. On success, hand the { order_id, payment_id, signature }
+   *      triple to POST /subscriptions/verify-payment so the backend
+   *      can verify the HMAC signature and rotate the subscription.
+   *   4. Notify the parent via onConfirm so the Tenant page refreshes.
+   *
+   *   Cycle changes and downgrades stay on the local stub path —
+   *   neither moves money, so we don't open Checkout for them.
+   * ─────────────────────────────────────────────────────────────── */
+  const handleRazorpayUpgrade = () =>
+    new Promise(async (resolve, reject) => {
+      try {
+        if (typeof window === 'undefined' || !window.Razorpay) {
+          reject(new Error('Razorpay Checkout failed to load. Please refresh the page and try again.'));
+          return;
+        }
+
+        // Step 1 — create the Razorpay order via the backend.
+        const orderRes = await apiFetch('/subscriptions/create-order', {
+          method: 'POST',
+          body: JSON.stringify({
+            planId:       nextPlan._id || nextPlan.id || null,
+            planName:     nextPlan.name,
+            billingCycle: cycle,
+            currency,
+          }),
+        });
+        let orderBody = null;
+        try { orderBody = await orderRes.json(); } catch { orderBody = null; }
+        if (!orderRes.ok || !orderBody?.data?.orderId) {
+          reject(new Error(orderBody?.message || `Failed to create order (${orderRes.status}).`));
+          return;
+        }
+        const { orderId, amount, currency: orderCurrency, keyId } = orderBody.data;
+
+        // Step 2 — open Razorpay Checkout.
+        const options = {
+          key:         keyId,
+          amount,                // already in paise from the backend
+          currency:    orderCurrency || 'INR',
+          name:        'GMS Subscription',
+          description: `${nextPlan.name} Plan — ${cycle === 'yearly' ? 'Annual' : 'Monthly'}`,
+          order_id:    orderId,
+          prefill: {
+            name:    org?.name  || '',
+            email:   org?.contactEmail || org?.email || '',
+            contact: org?.contactNumber || org?.phone || '',
+          },
+          theme: { color: '#0284C7' },
+          handler: async (response) => {
+            try {
+              // Step 3 — verify the signature server-side.
+              const verifyRes = await apiFetch('/subscriptions/verify-payment', {
+                method: 'POST',
+                body: JSON.stringify({
+                  razorpay_order_id:   response.razorpay_order_id,
+                  razorpay_payment_id: response.razorpay_payment_id,
+                  razorpay_signature:  response.razorpay_signature,
+                  planId:              nextPlan._id || nextPlan.id || null,
+                  planName:            nextPlan.name,
+                  billingCycle:        cycle,
+                  currency,
+                }),
+              });
+              let verifyBody = null;
+              try { verifyBody = await verifyRes.json(); } catch { verifyBody = null; }
+              if (!verifyRes.ok || verifyBody?.success === false) {
+                reject(new Error(verifyBody?.message || `Verification failed (${verifyRes.status}).`));
+                return;
+              }
+              resolve({ paymentId: response.razorpay_payment_id });
+            } catch (err) {
+              reject(err);
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              reject(new Error('Payment cancelled by user'));
+            },
+          },
+        };
+
+        const rzp = new window.Razorpay(options);
+        rzp.on('payment.failed', (resp) => {
+          reject(new Error(resp?.error?.description || 'Payment failed'));
+        });
+        rzp.open();
+      } catch (err) {
+        reject(err);
+      }
+    });
+
   const handleConfirm = async () => {
     if (saving || kind === 'noop') return;
+    setErrorMsg('');
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 800));
 
-    const txnId = kind === 'upgrade' ? makeTxnId() : null;
-    if (txnId) {
-      // eslint-disable-next-line no-console
-      console.log('[payment-stub]', {
-        orgId:    org?.id,
-        plan:     nextPlan.name,
-        cycle,
-        amount:   periodAmount,
-        currency,
-        gateway,
-        txnId,
-      });
+    try {
+      let txnId = null;
+
+      if (kind === 'upgrade') {
+        /* Real money — go through Razorpay. */
+        const result = await handleRazorpayUpgrade();
+        txnId = result?.paymentId || null;
+      }
+
+      /* Downgrade scheduling: tell the caller when it would take effect.
+         For mock simplicity the caller flips org.plan immediately anyway. */
+      let scheduledFor = null;
+      if (kind === 'downgrade' && org?.endDate) {
+        scheduledFor = org.endDate;
+      }
+
+      onConfirm?.({ plan: nextPlan, cycle, kind, txnId, scheduledFor });
+    } catch (err) {
+      const msg = err?.message || 'Something went wrong. Please try again.';
+      /* "Cancelled by user" is a soft state — close the spinner and let
+         the user retry without a scary red banner. */
+      if (msg !== 'Payment cancelled by user') {
+        setErrorMsg(msg);
+      }
+    } finally {
+      setSaving(false);
     }
-
-    /* Downgrade scheduling: tell the caller when it would take effect.
-       For mock simplicity the caller flips org.plan immediately anyway. */
-    let scheduledFor = null;
-    if (kind === 'downgrade' && org?.endDate) {
-      scheduledFor = org.endDate;
-    }
-
-    onConfirm?.({ plan: nextPlan, cycle, kind, txnId, scheduledFor });
-    setSaving(false);
   };
 
   const ctaLabel = saving
@@ -283,8 +388,17 @@ export default function ChangePlanModal({
             Indicative pricing — actual invoice billed in your contracted currency at production rates.
           </p>
 
-          {/* TODO — replace mock multiplier + payment stub with live FX rates +
-              real Razorpay/Telr/Stripe SDK in production finance phase. */}
+          {errorMsg && (
+            <div role="alert" style={{
+              margin: 0, padding: '10px 12px', borderRadius: 9,
+              background: '#FEF2F2', border: '1.5px solid #FCA5A5',
+              fontSize: 12, fontWeight: 600, color: '#991B1B',
+              display: 'flex', alignItems: 'flex-start', gap: 6,
+            }}>
+              <AlertTriangle size={13} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>{errorMsg}</span>
+            </div>
+          )}
         </div>
 
         <Footer>

@@ -5,7 +5,7 @@ import {
   Calendar, ClipboardList, Clock, CheckCircle, TrendingUp,
   SlidersHorizontal, ChevronDown,
 } from 'lucide-react';
-import { useCollection, STORAGE_KEYS } from '../../store';
+import { useCollection, STORAGE_KEYS, SAME_TAB_EVENT } from '../../store';
 import { MOCK_APPOINTMENTS } from '../../data/mockAppointments';
 import {
   MOCK_OFFICES, MOCK_STAFF, MOCK_SERVICES, MOCK_ORGANIZATIONS,
@@ -51,17 +51,38 @@ function GuestLogBody({ user, setActivePage }) {
   const [servicesAll]  = useCollection(STORAGE_KEYS.SERVICES,     MOCK_SERVICES);
   const [orgsAll]      = useCollection(STORAGE_KEYS.ORGANIZATIONS, MOCK_ORGANIZATIONS);
 
-  /* Bug 13 — short polling tick so the guest log refreshes for the Director
-     and Super Admin even when a write came in via a path that bypassed the
-     useCollection broadcast (legacy localStorage.setItem callers, native
-     `storage` events from other tabs that arrived before mount, etc.). The
-     `useCollection` listener already covers most cases; this is the safety
-     net that keeps the live view honest. */
-  const [, setTick] = useState(0);
+  /* Real-time refresh — the Guest Log must reflect every check-in /
+     check-out / walk-in the instant it happens, in both the Director
+     and Super Admin views. The previous 15-second tick only forced a
+     re-render; it did not re-read localStorage, so writes that landed
+     between tab focus changes (or before this listener mounted) were
+     invisible until a manual reload.
+   *
+     We now poll every 2 seconds and dispatch the SAME_TAB_EVENT for
+     each data store the page reads. `useCollection` already filters
+     out no-op updates (it diffs the raw JSON before re-rendering), so
+     the broadcast is cheap when nothing changed and instant when it
+     did. The `lastUpdatedAt` state is bumped on every real change so
+     the header can show "Live · updated HH:MM:SS". */
+  const REFRESH_KEYS = useMemo(() => [
+    STORAGE_KEYS.APPOINTMENTS,
+    STORAGE_KEYS.OFFICES,
+    STORAGE_KEYS.STAFF,
+    STORAGE_KEYS.SERVICES,
+    STORAGE_KEYS.ORGANIZATIONS,
+  ], []);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(() => new Date());
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 15000);
+    const tick = () => {
+      for (const key of REFRESH_KEYS) {
+        try {
+          window.dispatchEvent(new CustomEvent(SAME_TAB_EVENT, { detail: { key } }));
+        } catch { /* very old browsers — ignore */ }
+      }
+    };
+    const id = setInterval(tick, 2000);
     return () => clearInterval(id);
-  }, []);
+  }, [REFRESH_KEYS]);
 
   const opRoleLower = String(user?.role || '').toLowerCase();
   const isSuperRead = opRoleLower === 'superadmin';
@@ -132,6 +153,26 @@ function GuestLogBody({ user, setActivePage }) {
     }),
     [scopedAppointments, scopedOffices, scopedStaff, scopedServices, orgsAll, includeScheduledOnly],
   );
+
+  /* Whenever the underlying appointment data actually changes (a guest
+   * is added or checked out by any role on this tab or another), bump
+   * the "last updated" timestamp shown in the header so the operator
+   * can see the page is live. We diff on the appointments fingerprint
+   * — id + status + checkedInAt + checkedOutAt — to ignore renders
+   * caused by unrelated re-mounts. */
+  const apptFingerprint = useMemo(
+    () => (scopedAppointments || [])
+      .map((a) => `${a?.id}|${a?.status}|${a?.checkedInAt || ''}|${a?.checkedOutAt || ''}`)
+      .join('§'),
+    [scopedAppointments],
+  );
+  const fingerprintRef = React.useRef(apptFingerprint);
+  useEffect(() => {
+    if (fingerprintRef.current !== apptFingerprint) {
+      fingerprintRef.current = apptFingerprint;
+      setLastUpdatedAt(new Date());
+    }
+  }, [apptFingerprint]);
 
   useEffect(() => {
     if (dateRange !== 'custom') { setCustomError(''); return; }
@@ -243,9 +284,26 @@ function GuestLogBody({ user, setActivePage }) {
         {/* Header */}
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="font-[Outfit,sans-serif] text-[22px] font-extrabold leading-tight text-[#0C2340] dark:text-slate-100">
-              Guest Log
-            </h1>
+            <div className="flex items-center gap-3">
+              <h1 className="font-[Outfit,sans-serif] text-[22px] font-extrabold leading-tight text-[#0C2340] dark:text-slate-100">
+                Guest Log
+              </h1>
+              {/* Live indicator — pulses while the page is mounted so the
+                  operator can see the view is updating in real time. */}
+              <span
+                title={`Live · last update ${lastUpdatedAt.toLocaleTimeString('en-GB')}`}
+                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+              >
+                <span className="relative inline-flex h-2 w-2">
+                  <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500 opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                </span>
+                Live
+                <span className="font-mono text-[10px] font-semibold text-emerald-600/80 dark:text-emerald-300/80">
+                  {lastUpdatedAt.toLocaleTimeString('en-GB')}
+                </span>
+              </span>
+            </div>
             <p className="mt-1 text-[13px] text-slate-500 dark:text-slate-400">
               Unified record of every visitor who has arrived, is arriving, or has left.
             </p>

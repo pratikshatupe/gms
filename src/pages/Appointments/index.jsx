@@ -10,7 +10,8 @@ import { MOCK_OFFICES, MOCK_STAFF } from '../../data/mockData';
 import { useAuth } from '../../context/AuthContext';
 import { useRole } from '../../context/RoleContext';
 import NoAccess from '../../components/NoAccess';
-import { Pagination, SearchableSelect, EmptyState, Toast, MobileCardList, MobileCard } from '../../components/ui';
+import { Pagination, SearchableSelect, EmptyState, Toast, MobileCardList, MobileCard, ConfirmModal } from '../../components/ui';
+import { addAuditLog } from '../../utils/auditLogger';
 import {
   byOrg, displayStatus, VISITOR_TYPES,
   formatAppointmentTime, formatDateGB,
@@ -84,7 +85,7 @@ export default function Appointments({ setActivePage }) {
 }
 
 function AppointmentsBody({ user, hasPermission, setActivePage }) {
-  const [appointments] = useCollection(STORAGE_KEYS.APPOINTMENTS, MOCK_APPOINTMENTS);
+  const [appointments, , , removeAppt, replaceAppts] = useCollection(STORAGE_KEYS.APPOINTMENTS, MOCK_APPOINTMENTS);
   const [offices]      = useCollection(STORAGE_KEYS.OFFICES,      MOCK_OFFICES);
   const [staffAll]     = useCollection(STORAGE_KEYS.STAFF,        MOCK_STAFF);
 
@@ -127,6 +128,13 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
   const [showAdd, setShowAdd]           = useState(false);
   const [prefillDate, setPrefillDate]   = useState('');
   const [toast, setToast]               = useState(null);
+
+  /* Selection + bulk-delete state. `selectedIds` is a Set of
+   * appointment ids the user has ticked; `confirmDelete` holds either
+   * { kind: 'one', id } or { kind: 'many', ids: [...] } and drives the
+   * shared ConfirmModal. */
+  const [selectedIds, setSelectedIds]   = useState(() => new Set());
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const showToast = (msg, type = 'success') => setToast({ msg, type });
 
@@ -197,6 +205,87 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
     [viewId, scoped],
   );
 
+  /* Selection helpers — keep selection scoped to the currently visible
+   * filter slice so a stale filter change doesn't leave invisible
+   * checkboxes ticked. We refresh selectedIds whenever `sorted` shrinks. */
+  const sortedIdSet = useMemo(() => new Set((sorted || []).map((a) => a.id)), [sorted]);
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      let changed = false;
+      const next = new Set();
+      for (const id of prev) {
+        if (sortedIdSet.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [sortedIdSet]);
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  /* Header checkbox toggles the entire filtered set (`sorted`), not just
+   * the current page, so "select all" is intuitive when paginated. */
+  const allFilteredSelected = sorted.length > 0 && sorted.every((a) => selectedIds.has(a.id));
+  const someFilteredSelected = sorted.some((a) => selectedIds.has(a.id));
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (allFilteredSelected) {
+        const next = new Set(prev);
+        for (const a of sorted) next.delete(a.id);
+        return next;
+      }
+      const next = new Set(prev);
+      for (const a of sorted) next.add(a.id);
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const requestDeleteOne = (id) => setConfirmDelete({ kind: 'one', id });
+  const requestDeleteMany = () => {
+    if (selectedIds.size === 0) return;
+    setConfirmDelete({ kind: 'many', ids: [...selectedIds] });
+  };
+
+  const performDelete = () => {
+    if (!confirmDelete) return;
+    const author = user?.name || 'Unknown';
+    const role   = (user?.role || '').toString();
+    const orgId  = user?.organisationId || user?.orgId;
+
+    if (confirmDelete.kind === 'one') {
+      const id = confirmDelete.id;
+      removeAppt(id);
+      addAuditLog({
+        userName: author, role, action: 'DELETE', module: 'Appointments',
+        description: `Deleted appointment ${id}.`, orgId,
+      });
+      setSelectedIds((prev) => {
+        const next = new Set(prev); next.delete(id); return next;
+      });
+      showToast(`Appointment ${id} deleted successfully.`);
+    } else {
+      const idSet = new Set(confirmDelete.ids);
+      replaceAppts((list) => list.filter((a) => !idSet.has(a?.id)));
+      addAuditLog({
+        userName: author, role, action: 'BULK_DELETE', module: 'Appointments',
+        description: `Deleted ${idSet.size} appointment${idSet.size === 1 ? '' : 's'} (${[...idSet].join(', ')}).`,
+        orgId,
+      });
+      setSelectedIds(new Set());
+      showToast(`${idSet.size} appointment${idSet.size === 1 ? '' : 's'} deleted successfully.`);
+    }
+    setConfirmDelete(null);
+  };
+
   if (openRecord) {
     return (
       <div className="w-full min-h-screen bg-slate-50 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 dark:bg-[#050E1A]">
@@ -231,7 +320,7 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
         </nav>
 
         <header className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h1 className="font-[Outfit,sans-serif] text-[22px] font-extrabold leading-tight text-[#0C2340] dark:text-slate-100">
               Appointments
             </h1>
@@ -239,7 +328,7 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
               Schedule visitor meetings, approve requests and track check-ins across your organisation.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <div role="tablist" aria-label="View mode" className="inline-flex rounded-[10px] border border-slate-200 bg-white p-0.5 dark:border-[#142535] dark:bg-[#0A1828]">
               <button type="button" role="tab" aria-selected={view === 'list'}
                 onClick={() => setView('list')} title="List view"
@@ -267,14 +356,21 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
         </header>
 
         <div className="rounded-[14px] border border-slate-200 bg-white p-3 shadow-sm dark:border-[#142535] dark:bg-[#0A1828]">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">
-            <div className="relative lg:col-span-2">
+          {/* Responsive filter grid:
+                mobile (< md)    → single column stack
+                tablet (md→xl)   → 2 columns, filters wrap to 3 rows
+                desktop (xl+)    → 5 columns in one row, search 2× wide
+              `minmax(0,*)` lets each cell shrink past its content width
+              so long option labels can't push the row past 100% and
+              spawn a horizontal scrollbar. */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:[grid-template-columns:minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="relative min-w-0">
               <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input type="text" value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 placeholder="Search by visitor, company, purpose or ID"
                 aria-label="Search appointments"
-                className="w-full rounded-[10px] border border-slate-200 bg-white py-2 pl-9 pr-9 text-[13px] text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-100 dark:border-[#142535] dark:bg-[#071220] dark:text-slate-200" />
+                className="w-full min-w-0 rounded-[10px] border border-slate-200 bg-white py-2 pl-9 pr-9 text-[13px] text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-100 dark:border-[#142535] dark:bg-[#071220] dark:text-slate-200" />
               {search && (
                 <button type="button" onClick={() => { setSearch(''); setPage(1); }}
                   aria-label="Clear search" title="Clear search"
@@ -339,6 +435,32 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
           </div>
         </div>
 
+        {/* Bulk-action bar — appears only when one or more rows are
+            selected. Hosts both the selection summary and the bulk
+            Delete CTA, plus a Clear Selection button. */}
+        {canDelete && view === 'list' && selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-sky-200 bg-sky-50 px-4 py-2.5 shadow-sm dark:border-sky-400/30 dark:bg-sky-500/10">
+            <div className="flex items-center gap-2 text-[13px] font-bold text-sky-800 dark:text-sky-200">
+              <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-sky-700 px-1.5 text-[11px] font-extrabold text-white">
+                {selectedIds.size}
+              </span>
+              {selectedIds.size === 1 ? 'appointment selected' : 'appointments selected'}
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={clearSelection}
+                className="cursor-pointer rounded-[8px] border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-bold text-slate-600 hover:bg-slate-50 dark:border-[#142535] dark:bg-[#0A1828] dark:text-slate-300">
+                Clear selection
+              </button>
+              <button type="button" onClick={requestDeleteMany}
+                title={`Delete ${selectedIds.size} selected appointment${selectedIds.size === 1 ? '' : 's'}`}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-[8px] border border-red-600 bg-red-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-red-700">
+                <Trash2 size={13} aria-hidden="true" />
+                Delete selected
+              </button>
+            </div>
+          </div>
+        )}
+
         {view === 'calendar' ? (
           <AppointmentsCalendarView
             appointments={scoped}
@@ -359,6 +481,12 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
             setPage={setPage} setPerPage={setPerPage}
             canEdit={canEdit} canDelete={canDelete} showActions={showActions}
             onView={setViewId} onEdit={(r) => setEditRow(r)} onCancel={(r) => setCancelRow(r)}
+            onDelete={requestDeleteOne}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+            allFilteredSelected={allFilteredSelected}
+            someFilteredSelected={someFilteredSelected}
+            onToggleSelectAll={toggleSelectAll}
             scopedAll={scoped}
           />
         )}
@@ -383,6 +511,24 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
           onCancelled={(row) => { setCancelRow(null); showToast(`Appointment ${row.id} cancelled successfully.`); }} />
       )}
 
+      {confirmDelete && (
+        <ConfirmModal
+          open
+          title={confirmDelete.kind === 'one' ? 'Delete Appointment' : 'Delete Appointments'}
+          message={confirmDelete.kind === 'one'
+            ? (() => {
+                const apt = scoped.find((a) => a.id === confirmDelete.id);
+                const name = apt?.visitor?.fullName || apt?.guestName || confirmDelete.id;
+                return `Are you sure you want to permanently delete appointment ${confirmDelete.id} (${name})? This cannot be undone.`;
+              })()
+            : `Are you sure you want to permanently delete ${confirmDelete.ids.length} selected appointment${confirmDelete.ids.length === 1 ? '' : 's'}? This cannot be undone.`}
+          confirmLabel={confirmDelete.kind === 'one' ? 'Delete' : `Delete ${confirmDelete.ids.length}`}
+          destructive
+          onConfirm={performDelete}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
+
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
@@ -391,25 +537,81 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
 function ListBody({
   slice, officeById, total, safePage, perPage,
   setPage, setPerPage, canEdit, canDelete, showActions,
-  onView, onEdit, onCancel, scopedAll,
+  onView, onEdit, onCancel, onDelete, scopedAll,
+  selectedIds, onToggleSelect,
+  allFilteredSelected, someFilteredSelected, onToggleSelectAll,
 }) {
+  /* Indeterminate state on the master checkbox needs a ref so we can
+   * write the property post-mount (HTML doesn't expose `indeterminate`
+   * as an attribute, only as an Element property). */
+  const masterCheckboxRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!masterCheckboxRef.current) return;
+    masterCheckboxRef.current.indeterminate = !allFilteredSelected && Boolean(someFilteredSelected);
+  }, [allFilteredSelected, someFilteredSelected]);
+
+  /* Header columns vary slightly when the user can delete — checkbox
+   * column joins on the left, Actions on the right. We define each
+   * column with an explicit width so `table-layout: fixed` can size
+   * them deterministically and long visitor / office / host strings
+   * truncate with `…` instead of pushing the table past the viewport.
+   *
+   *   - Fixed-pixel widths for chrome / metadata columns (Select, SR,
+   *     Type, Date, Time, Status, Actions).
+   *   - Percentage widths for the three text-heavy columns (Visitor /
+   *     Host / Office) so they share the leftover space. */
+  const columns = [
+    ...(canDelete ? [{ key: 'select',  label: 'Select',  width: '46px' }] : []),
+    { key: 'sr',       label: 'SR. No.',  width: '60px' },
+    { key: 'visitor',  label: 'Visitor',  width: '24%' },
+    { key: 'type',     label: 'Type',     width: '90px' },
+    { key: 'host',     label: 'Host',     width: '14%' },
+    { key: 'office',   label: 'Office',   width: '14%' },
+    { key: 'date',     label: 'Date',     width: '100px' },
+    { key: 'time',     label: 'Time',     width: '120px' },
+    { key: 'status',   label: 'Status',   width: '110px' },
+    ...(showActions ? [{ key: 'actions', label: 'Actions', width: '120px' }] : []),
+  ];
+
   return (
     <>
-      {/* Table — desktop only */}
+      {/* Table — desktop only.
+            outer wrapper: rounded card + clip so corners stay sharp.
+            inner wrapper: overflow-x-auto so on truly narrow viewports
+            (<≈1100px once min sidebar + padding eat into the space)
+            the user can still pan rather than seeing the action column
+            cut off. On normal desktops the table fits without scroll. */}
       <div className="hidden lg:block overflow-hidden rounded-[14px] border border-slate-200 bg-white shadow-sm dark:border-[#142535] dark:bg-[#0A1828]">
-        <div className="w-full">
-          <table className="w-full min-w-[1100px] border-collapse text-left text-[13px]">
+        <div className="w-full overflow-x-auto">
+          <table className="w-full border-collapse text-left text-[13px]" style={{ tableLayout: 'fixed' }}>
+            <colgroup>
+              {columns.map((c) => (
+                <col key={c.key} style={{ width: c.width }} />
+              ))}
+            </colgroup>
             <thead className="bg-slate-50 dark:bg-[#071220]">
               <tr>
-                {['SR. No.', 'Visitor', 'Type', 'Host', 'Office', 'Date', 'Time', 'Status', ...(showActions ? ['Actions'] : [])].map((h) => (
-                  <th key={h} className="whitespace-nowrap px-3 py-3 text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500 dark:text-slate-400">{h}</th>
+                {columns.map((c) => (
+                  <th key={c.key} className="whitespace-nowrap px-3 py-3 text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500 dark:text-slate-400">
+                    {c.key === 'select' ? (
+                      <input
+                        ref={masterCheckboxRef}
+                        type="checkbox"
+                        aria-label="Select all appointments matching the current filters"
+                        title={allFilteredSelected ? 'Deselect all' : 'Select all'}
+                        checked={allFilteredSelected}
+                        onChange={onToggleSelectAll}
+                        className="h-4 w-4 cursor-pointer accent-sky-600"
+                      />
+                    ) : c.label}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-[#142535]">
               {slice.length === 0 && (
                 <tr>
-                  <td colSpan={showActions ? 9 : 8} className="px-3 py-0">
+                  <td colSpan={columns.length} className="px-3 py-0">
                     <EmptyState
                       icon={Calendar}
                       message={scopedAll.length === 0 ? 'No appointments scheduled yet.' : 'No records found.'}
@@ -425,21 +627,33 @@ function ListBody({
                 const office = officeById.get(a.officeId);
                 const disp = displayStatus(a);
                 const typeMeta = VISITOR_TYPE_META[a.visitor?.visitorType] || VISITOR_TYPE_META.Regular;
+                const isSelected = selectedIds?.has(a.id);
                 return (
                   <tr key={a.id}
                     onClick={() => onView(a.id)}
-                    className="cursor-pointer transition hover:bg-slate-50 dark:hover:bg-[#1E1E3F]">
+                    className={`cursor-pointer transition ${isSelected ? 'bg-sky-50 dark:bg-sky-500/10' : 'hover:bg-slate-50 dark:hover:bg-[#1E1E3F]'}`}>
+                    {canDelete && (
+                      <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select appointment ${a.id}`}
+                          checked={Boolean(isSelected)}
+                          onChange={() => onToggleSelect?.(a.id)}
+                          className="h-4 w-4 cursor-pointer accent-sky-600"
+                        />
+                      </td>
+                    )}
                     <td className="px-3 py-3 align-top font-semibold text-slate-400">{sr}</td>
                     <td className="px-3 py-3 align-top">
-                      <div className="flex items-start gap-2">
+                      <div className="flex items-start gap-2 min-w-0">
                         <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-sky-200 bg-sky-50 text-[18px] leading-none dark:border-sky-400/30 dark:bg-sky-500/15">
                           {typeMeta.icon}
                         </span>
-                        <div className="min-w-0">
-                          <div className="break-words text-[13px] font-bold text-[#0C2340] dark:text-slate-100">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px] font-bold text-[#0C2340] dark:text-slate-100" title={a.visitor?.fullName || a.guestName || ''}>
                             {a.visitor?.fullName || a.guestName || '—'}
                           </div>
-                          <div className="mt-0.5 break-words text-[11px] text-slate-400">
+                          <div className="mt-0.5 truncate text-[11px] text-slate-400">
                             {a.visitor?.companyName || a.company || '—'} · <span className="font-mono">{a.id}</span>
                           </div>
                         </div>
@@ -451,20 +665,22 @@ function ListBody({
                       </span>
                     </td>
                     <td className="px-3 py-3 align-top">
-                      <div className="flex items-start gap-1.5 min-w-0">
-                        <UserRound size={12} aria-hidden="true" className="mt-0.5 shrink-0 text-slate-400" />
-                        <span className="break-words text-[12px] font-semibold text-slate-700 dark:text-slate-200">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <UserRound size={12} aria-hidden="true" className="shrink-0 text-slate-400" />
+                        <span className="truncate text-[12px] font-semibold text-slate-700 dark:text-slate-200" title={a.host || ''}>
                           {a.host || '—'}
                         </span>
                       </div>
                     </td>
                     <td className="px-3 py-3 align-top text-[12px] text-slate-600 dark:text-slate-300">
-                      {office?.name || '—'}
+                      <span className="block truncate" title={office?.name || ''}>
+                        {office?.name || '—'}
+                      </span>
                     </td>
-                    <td className="px-3 py-3 align-top text-[12px] text-slate-700 dark:text-slate-200">
+                    <td className="whitespace-nowrap px-3 py-3 align-top text-[12px] text-slate-700 dark:text-slate-200">
                       {formatDateGB(a.scheduledDate || a.date)}
                     </td>
-                    <td className="px-3 py-3 align-top text-[12px] text-slate-700 dark:text-slate-200">
+                    <td className="whitespace-nowrap px-3 py-3 align-top text-[12px] text-slate-700 dark:text-slate-200">
                       {formatAppointmentTime(a, office)}
                     </td>
                     <td className="px-3 py-3 align-top">
@@ -475,8 +691,8 @@ function ListBody({
                         <div className="flex items-center gap-1">
                           <IconBtn Icon={Eye} tone="slate" title={`View ${a.id}`} onClick={() => onView(a.id)} />
                           {canEdit && <IconBtn Icon={Pencil} tone="violet" title={`Edit ${a.id}`} onClick={() => onEdit(a)} />}
-                          {canDelete && a.status !== 'Cancelled' && a.status !== 'Completed' && (
-                            <IconBtn Icon={Trash2} tone="red" title={`Cancel ${a.id}`} onClick={() => onCancel(a)} />
+                          {canDelete && (
+                            <IconBtn Icon={Trash2} tone="red" title={`Delete ${a.id} permanently`} onClick={() => onDelete?.(a.id)} />
                           )}
                         </div>
                       </td>
@@ -504,6 +720,21 @@ function ListBody({
 
       {/* Cards — mobile/tablet only */}
       <div className="lg:hidden">
+        {canDelete && slice.length > 0 && (
+          <div className="mb-2 flex items-center justify-between rounded-[10px] border border-slate-200 bg-white px-3 py-2 text-[12px] dark:border-[#142535] dark:bg-[#0A1828]">
+            <label className="inline-flex cursor-pointer items-center gap-2 font-bold text-slate-600 dark:text-slate-300">
+              <input
+                type="checkbox"
+                aria-label="Select all visible appointments"
+                checked={allFilteredSelected}
+                onChange={onToggleSelectAll}
+                className="h-4 w-4 cursor-pointer accent-sky-600"
+              />
+              Select all
+            </label>
+            <span className="text-[11px] text-slate-400">{selectedIds?.size || 0} selected</span>
+          </div>
+        )}
         <MobileCardList
           items={slice}
           emptyNode={<EmptyState icon={Calendar} message={scopedAll.length === 0 ? 'No appointments yet.' : 'No records found.'} description="Try removing a filter or clearing the search." />}
@@ -511,6 +742,7 @@ function ListBody({
             const office = officeById.get(a.officeId);
             const disp = displayStatus(a);
             const typeMeta = VISITOR_TYPE_META[a.visitor?.visitorType] || VISITOR_TYPE_META.Regular;
+            const isSelected = selectedIds?.has(a.id);
             return (
               <MobileCard
                 key={a.id}
@@ -519,6 +751,20 @@ function ListBody({
                 subtitle={`${a.visitor?.companyName || a.company || '—'} · ${a.id}`}
                 badge={<StatusPill label={disp.label} tone={disp.tone} />}
                 rows={[
+                  ...(canDelete ? [{
+                    label: 'Select',
+                    value: (
+                      <span onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select appointment ${a.id}`}
+                          checked={Boolean(isSelected)}
+                          onChange={() => onToggleSelect?.(a.id)}
+                          className="h-4 w-4 cursor-pointer accent-sky-600"
+                        />
+                      </span>
+                    ),
+                  }] : []),
                   { label: 'Type', value: <span className="inline-flex items-center gap-1">{typeMeta.icon} {a.visitor?.visitorType || 'Regular'}</span> },
                   { label: 'Host', value: a.host },
                   { label: 'Office', value: office?.name },
@@ -529,8 +775,8 @@ function ListBody({
                   <>
                     <IconBtn Icon={Eye} tone="slate" title="View" onClick={() => onView(a.id)} />
                     {canEdit && <IconBtn Icon={Pencil} tone="violet" title="Edit" onClick={() => onEdit(a)} />}
-                    {canDelete && a.status !== 'Cancelled' && a.status !== 'Completed' && (
-                      <IconBtn Icon={Trash2} tone="red" title="Cancel" onClick={() => onCancel(a)} />
+                    {canDelete && (
+                      <IconBtn Icon={Trash2} tone="red" title="Delete permanently" onClick={() => onDelete?.(a.id)} />
                     )}
                   </>
                 )}
@@ -555,6 +801,7 @@ function IconBtn({ Icon, title, tone = 'slate', onClick }) {
   const cls = {
     slate:  'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-[#142535] dark:bg-[#071220] dark:text-slate-300 dark:hover:bg-[#1E1E3F]',
     violet: 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-400/30 dark:bg-sky-500/15 dark:text-sky-300',
+    amber:  'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300',
     red:    'border-red-200 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300',
   }[tone];
   return (

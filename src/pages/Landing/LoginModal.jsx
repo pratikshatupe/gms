@@ -3,6 +3,7 @@ import {
   P, PL, PD, PBG, PBORDER, DARK, MID, MUTED,
   DEMO_ROLES, LM_EMAIL_RE,
 } from './landingConstants';
+import { validateEmail, sanitizeEmail } from '../../utils/validators';
 
 function ForgotPasswordPanel({ onBack }) {
   const [fpEmail,   setFpEmail]   = useState('');
@@ -11,8 +12,8 @@ function ForgotPasswordPanel({ onBack }) {
   const [fpBusy,    setFpBusy]    = useState(false);
 
   const submit = async () => {
-    if (!fpEmail.trim())              { setFpErr('Email is required.'); return; }
-    if (!LM_EMAIL_RE.test(fpEmail))   { setFpErr('Enter a valid email address.'); return; }
+    const emailErr = validateEmail(fpEmail);
+    if (emailErr) { setFpErr(emailErr); return; }
     setFpErr(''); setFpBusy(true);
     await new Promise(r => setTimeout(r, 800));
     setFpBusy(false); setFpSent(true);
@@ -123,8 +124,10 @@ export default function LoginModal({ onClose, onLoginSuccess }) {
 
   const validate = () => {
     const e = {};
-    if (!email.trim())               e.email    = 'Email is required.';
-    else if (!LM_EMAIL_RE.test(email)) e.email  = 'Enter a valid email address.';
+    const emailErr = validateEmail(email);
+    if (emailErr) e.email = emailErr;
+    /* Lenient login rule (min 6) preserved for back-compat with demo
+     * accounts. Strict 8+ rule is enforced on password CREATION paths. */
     if (!password.trim())            e.password = 'Password is required.';
     else if (password.length < 6)    e.password = 'Password must be at least 6 characters.';
     setErrors(e);
@@ -238,7 +241,7 @@ export default function LoginModal({ onClose, onLoginSuccess }) {
                   textTransform:'uppercase', color:'#64748B', marginBottom:6 }}>
                   Email ID <span style={{ color:'#EF4444' }}>*</span>
                 </label>
-                <input value={email} onChange={e => { setEmail(e.target.value); if(errors.email||errors.general) setErrors({}); }}
+                <input value={email} onChange={e => { setEmail(sanitizeEmail(e.target.value)); if(errors.email||errors.general) setErrors({}); }}
                   placeholder="Enter Email ID" type="email" style={inp(errors.email)}
                   onFocus={e => e.target.style.borderColor = PL}
                   onBlur={e  => e.target.style.borderColor = errors.email ? '#EF4444' : PBORDER}

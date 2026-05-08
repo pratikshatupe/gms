@@ -4,7 +4,8 @@ import { Toast, ConfirmModal } from '../../components/ui';
 import { useCollection, STORAGE_KEYS } from '../../store';
 import { useAuth } from '../../context/AuthContext';
 import { addAuditLog } from '../../utils/auditLogger';
-import { MOCK_ORGANIZATIONS } from '../../data/mockData';
+import { MOCK_ORGANIZATIONS, MOCK_STAFF } from '../../data/mockData';
+import { dispatchPasswordExpiryEmails } from '../../utils/passwordExpiry';
 import PlanEditorModal from '../../components/PlanEditorModal';
 import EmailTemplates from './EmailTemplates';
 
@@ -1128,6 +1129,7 @@ const TABS = [
 export default function SuperAdminSettings() {
   const { user } = useAuth();
   const [stored, , , , replace] = useCollection(STORAGE_KEYS.PLATFORM_SETTINGS, defaultPlatformSettings());
+  const [staff, , updateStaff] = useCollection(STORAGE_KEYS.STAFF, MOCK_STAFF);
   const persisted = useMemo(() => mergeWithDefaults(stored), [stored]);
 
   const [active, setActive] = useState('branding');
@@ -1166,7 +1168,16 @@ export default function SuperAdminSettings() {
     replace({ ...persisted, plans: nextPlans });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    /* Detect a change to the password expiry policy BEFORE we replace
+     * the stored payload, so we know whether to fire expiry emails. We
+     * fire whenever the security tab's expiryDays > 0 either changed
+     * just now OR was already configured but no users have been
+     * notified yet (idempotency lives on each staff record). */
+    const prevExpiry = Number(persisted.security?.passwordExpiryDays || 0);
+    const nextExpiry = Number(draft.security?.passwordExpiryDays || 0);
+    const expiryChanged = prevExpiry !== nextExpiry;
+
     replace(draft);
     setToast({ msg: 'Settings saved successfully.', type: 'success' });
     addAuditLog({
@@ -1176,6 +1187,51 @@ export default function SuperAdminSettings() {
       module:      'Platform Settings',
       description: `Saved platform settings (${active} tab touched last).`,
     });
+
+    /* Password expiry dispatch — mirrors backend
+     * dispatchPasswordExpiryWarnings. We check on every save so an
+     * admin who lowers the threshold (e.g. 180 → 90) immediately
+     * notifies users who newly fall outside the window. The 24-hour
+     * dedupe stamp on each staff record prevents duplicate emails. */
+    if (nextExpiry > 0) {
+      try {
+        const orgsById = (MOCK_ORGANIZATIONS || []).reduce((acc, o) => {
+          if (o?.id) acc[o.id] = o;
+          return acc;
+        }, {});
+        const result = await dispatchPasswordExpiryEmails({
+          staff,
+          expiryDays: nextExpiry,
+          updateStaff,
+          orgsById,
+        });
+        if (result.candidates > 0) {
+          const summary = `${result.sent}/${result.candidates} sent` +
+            (result.failed ? `, ${result.failed} failed` : '') +
+            (result.skipped ? `, ${result.skipped} skipped (SMTP)` : '');
+          setToast({
+            msg: result.sent > 0
+              ? `Password expiry emails: ${summary}.`
+              : `Password expiry: ${summary}.`,
+            type: result.failed && !result.sent ? 'error' : 'success',
+          });
+          addAuditLog({
+            userName:    user?.name || 'Super Admin',
+            role:        'superadmin',
+            action:      'EMAIL',
+            module:      'Platform Settings',
+            description: `Password expiry policy ${expiryChanged ? 'changed to ' + nextExpiry : 'enforced at ' + nextExpiry} days — ${summary}.`,
+          });
+        } else if (expiryChanged) {
+          /* Threshold updated but no one is currently over the limit
+           * (or all eligible users were already notified within 24h).
+           * Stay quiet to avoid noise. */
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[SuperAdminSettings] password-expiry dispatch failed:', err);
+      }
+    }
   };
 
   const handleDiscard = () => {

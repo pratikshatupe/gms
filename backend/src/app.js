@@ -31,7 +31,12 @@ app.use(
       if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      return callback(new Error('CORS: origin not allowed'));
+      /* Log the rejection so a misconfigured CORS_ORIGINS shows up in
+       * the server log instead of a generic 500. The frontend dev
+       * server may pick a different port (5174 if 5173 is taken),
+       * which silently breaks every API call until the env is fixed. */
+      logger.warn(`CORS: rejected origin "${origin}" — allowed: ${allowedOrigins.join(', ')}`);
+      return callback(new Error(`CORS: origin "${origin}" not allowed`));
     },
     credentials: true,
   })
@@ -42,7 +47,25 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(cookieParser());
 app.use(compression());
 app.use(mongoSanitize());
-app.use(xss());
+
+/* Apply xss-clean sanitisation to every route EXCEPT the email dispatch
+ * endpoint. The frontend POSTs a fully-rendered HTML envelope (built by
+ * htmlShell() in src/utils/emailTemplates.js) to /notifications/dispatch;
+ * xss-clean would strip every <tag> from `req.body.html`, leaving the
+ * recipient with an empty or text-only message and Gmail showing the
+ * raw source / nothing useful.
+ *
+ * The endpoint is otherwise safe because:
+ *   - the body is forwarded verbatim to nodemailer (never rendered as
+ *     HTML in our own pages), and
+ *   - the dispatch controller validates `to`, `subject`, and that `html`
+ *     contains real HTML before passing it on. */
+app.use((req, res, next) => {
+  if (req.path && req.path.includes('/notifications/dispatch')) {
+    return next();
+  }
+  return xss()(req, res, next);
+});
 
 app.use(
   morgan(env.isProd ? 'combined' : 'dev', {

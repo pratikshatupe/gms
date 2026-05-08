@@ -177,6 +177,95 @@ export function generateAppointmentCancelled({ apt, actorName, reason, org }) {
   };
 }
 
+/** Appointment checked out → visitor thank-you. Fires when an
+ *  appointment transitions to Completed (state machine handleCheckOut). */
+export function generateAppointmentCheckedOut({ apt, actorName, org }) {
+  const region      = pickRegion(org?.country);
+  const visitorName = apt?.visitorName || 'Visitor';
+  const hostName    = apt?.hostName    || '—';
+  const dateLabel   = apt?.date || '';
+  const timeLabel   = apt?.timeStart || '';
+  const orgName     = org?.name || BRAND_NAME;
+  const checkedOutAt = apt?.checkedOutAt
+    ? new Date(apt.checkedOutAt).toLocaleString('en-GB', {
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true,
+      })
+    : '';
+  const subject     = `Thank you for visiting ${orgName}.`;
+  const bodyHtml = `
+    <p style="margin:0 0 10px;">Dear ${escapeHtml(visitorName)},</p>
+    <p style="margin:0 0 10px;">Thank you for visiting <strong>${escapeHtml(orgName)}</strong>${hostName !== '—' ? ` to meet <strong>${escapeHtml(hostName)}</strong>` : ''}.
+    Your check-out has been recorded${checkedOutAt ? ` at <strong>${escapeHtml(checkedOutAt)}</strong>` : ''}${actorName ? ` by ${escapeHtml(actorName)}` : ''}.</p>
+    <p style="margin:0 0 10px;">If you have feedback about your visit, simply reply to this email — we read every reply.</p>
+    <p style="margin:0 0 10px;">We hope to welcome you again soon.</p>
+  `;
+  return {
+    to:      apt?.visitorEmail || '',
+    subject,
+    html:    htmlShell({ subject, bodyHtml, supportEmail: region.supportEmail }),
+    text:    plainTextShell({
+      subject,
+      lines: [
+        `Dear ${visitorName},`,
+        ``,
+        `Thank you for visiting ${orgName}${hostName !== '—' ? ` to meet ${hostName}` : ''}.`,
+        `Your check-out has been recorded${checkedOutAt ? ` at ${checkedOutAt}` : ''}${actorName ? ` by ${actorName}` : ''}.`,
+        ``,
+        `If you have feedback about your visit, simply reply to this email.`,
+        `We hope to welcome you again soon.`,
+      ],
+      supportEmail: region.supportEmail,
+    }),
+  };
+}
+
+/** Appointment reminder → visitor. Fires once per calendar day for every
+ *  Approved / Pending appointment whose scheduled date is still in the
+ *  future. `daysUntil` is computed by the dispatcher (0 = today). */
+export function generateAppointmentReminder({ apt, daysUntil, org }) {
+  const region      = pickRegion(org?.country);
+  const visitorName = apt?.visitorName || 'Visitor';
+  const hostName    = apt?.hostName    || '—';
+  const dateLabel   = apt?.date || '';
+  const timeLabel   = apt?.timeStart || '';
+  const orgName     = org?.name || BRAND_NAME;
+  const days        = Number.isFinite(daysUntil) ? daysUntil : null;
+  const whenLabel   = days === 0 ? 'today'
+    : days === 1 ? 'tomorrow'
+    : days != null ? `in ${days} days`
+    : '';
+  const subject = days === 0
+    ? `Reminder: your appointment with ${orgName} is today.`
+    : `Reminder: your appointment with ${orgName} ${whenLabel || `on ${dateLabel}`}.`;
+  const bodyHtml = `
+    <p style="margin:0 0 10px;">Dear ${escapeHtml(visitorName)},</p>
+    <p style="margin:0 0 10px;">This is a friendly reminder that your appointment with <strong>${escapeHtml(hostName)}</strong>
+    at <strong>${escapeHtml(orgName)}</strong> is scheduled for
+    <strong>${escapeHtml(dateLabel)}</strong> at <strong>${escapeHtml(timeLabel)}</strong>
+    (${escapeHtml(region.timezoneLabel)})${whenLabel ? ` — that's <strong>${escapeHtml(whenLabel)}</strong>` : ''}.</p>
+    <p style="margin:0 0 10px;">Please arrive 5 minutes early with a valid photo ID for check-in.</p>
+    <p style="margin:0 0 10px;">If you can no longer attend, please reply to this email so we can release the slot.</p>
+  `;
+  return {
+    to:      apt?.visitorEmail || '',
+    subject,
+    html:    htmlShell({ subject, bodyHtml, supportEmail: region.supportEmail }),
+    text:    plainTextShell({
+      subject,
+      lines: [
+        `Dear ${visitorName},`,
+        ``,
+        `This is a friendly reminder that your appointment with ${hostName} at ${orgName} is scheduled for ${dateLabel} at ${timeLabel} (${region.timezoneLabel})${whenLabel ? ` — that's ${whenLabel}` : ''}.`,
+        ``,
+        `Please arrive 5 minutes early with a valid photo ID for check-in.`,
+        `If you can no longer attend, reply to this email so we can release the slot.`,
+      ],
+      supportEmail: region.supportEmail,
+    }),
+  };
+}
+
 /** Walk-in arrived → host ping. */
 export function generateWalkInArrived({ visitor, host, org }) {
   const region      = pickRegion(org?.country);

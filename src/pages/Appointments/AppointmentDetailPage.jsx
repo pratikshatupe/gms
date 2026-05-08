@@ -19,6 +19,8 @@ import {
 import {
   resolveCurrencyForOrg, formatServicePrice,
 } from '../Services/AddServiceDrawer';
+import { generateAppointmentInviteEmail, previewEmail } from '../../utils/emailTemplates';
+import { useNotificationTriggers } from '../../utils/notificationTriggers';
 import CancelAppointmentModal from './CancelAppointmentModal';
 import ApproveAppointmentModal from './ApproveAppointmentModal';
 import VisitorBadge, { badgeFromAppointment } from '../../components/VisitorBadge';
@@ -54,6 +56,7 @@ export default function AppointmentDetailPage({
   appointmentRow, onBack, onEdit, canEdit, currentUser,
 }) {
   const [, , updateAppt] = useCollection(STORAGE_KEYS.APPOINTMENTS, MOCK_APPOINTMENTS);
+  const { fireAppointmentCheckedOut } = useNotificationTriggers();
   const [officesAll]  = useCollection(STORAGE_KEYS.OFFICES, MOCK_OFFICES);
   const [staffAll]    = useCollection(STORAGE_KEYS.STAFF,   MOCK_STAFF);
   const [roomsAll]    = useCollection(STORAGE_KEYS.ROOMS,   MOCK_ROOMS);
@@ -152,6 +155,22 @@ export default function AppointmentDetailPage({
       'APPOINTMENT_CHECKED_OUT',
       `Checked out ${appointmentRow.visitor?.fullName || appointmentRow.guestName || '—'} for appointment ${appointmentRow.id}.`,
     );
+    /* Fire the visitor thank-you email. Approved / Cancelled / Arrived
+     * already have their own triggers; Check-In is intentionally silent. */
+    fireAppointmentCheckedOut({
+      apt: {
+        id:           appointmentRow.id,
+        visitorName:  appointmentRow.visitor?.fullName || appointmentRow.guestName,
+        visitorEmail: appointmentRow.visitor?.emailId  || appointmentRow.visitor?.email || appointmentRow.guestEmail,
+        hostName:     host?.fullName || host?.name || appointmentRow.hostName,
+        date:         appointmentRow.scheduledDate || appointmentRow.date,
+        timeStart:    appointmentRow.startTime     || appointmentRow.time,
+        checkedOutAt: now,
+        organisationId: appointmentRow.orgId,
+      },
+      hostStaffId: appointmentRow.hostUserId || null,
+      org,
+    });
     showToast(`${appointmentRow.visitor?.fullName || 'Visitor'} checked out successfully.`);
   };
 
@@ -579,6 +598,7 @@ function ResendInviteModal({ appointmentRow, onClose, onSent }) {
   const email = visitor.emailId || '';
   const [sending, setSending] = React.useState(false);
   const [sent, setSent] = React.useState(false);
+  const [errorMsg, setErrorMsg] = React.useState('');
 
   React.useEffect(() => {
     if (!open) return undefined;
@@ -589,17 +609,47 @@ function ResendInviteModal({ appointmentRow, onClose, onSent }) {
 
   const handleSend = async () => {
     setSending(true);
-    await new Promise((r) => setTimeout(r, 1200));
-    /* Real implementation: POST /api/appointments/:id/resend-invite */
-    /* For now: open mailto as fallback so the button is functional */
-    const subject = encodeURIComponent(`Your Visit Invitation — ${appointmentRow.id}`);
-    const body = encodeURIComponent(
-      `Dear ${visitor.fullName || 'Visitor'},\n\nThis is a reminder of your scheduled appointment:\n\nID: ${appointmentRow.id}\nDate: ${appointmentRow.scheduledDate || appointmentRow.date || '—'}\nTime: ${appointmentRow.startTime || '—'} – ${appointmentRow.endTime || '—'}\n\nPlease present this email or your appointment ID upon arrival.\n\nThank you.`
-    );
-    window.open(`mailto:${email}?subject=${subject}&body=${body}`, '_blank');
-    setSending(false);
-    setSent(true);
-    setTimeout(() => { onSent?.(); }, 800);
+    setErrorMsg('');
+    try {
+      if (!email) {
+        setErrorMsg('No visitor email on file for this appointment.');
+        setSending(false);
+        return;
+      }
+      const orgRef = appointmentRow?.orgId || appointmentRow?.organisationId || null;
+      const org = orgRef
+        ? (MOCK_ORGANIZATIONS || []).find((o) => o?.id === orgRef)
+        : null;
+
+      const inviteEnvelope = generateAppointmentInviteEmail({
+        visitorName:   visitor.fullName,
+        scheduledDate: appointmentRow.scheduledDate || appointmentRow.date,
+        startTime:     appointmentRow.startTime,
+        purpose:       appointmentRow.purpose || appointmentRow.title,
+        orgName:       org?.name,
+        orgCountry:    org?.country,
+        visitorEmail:  email,
+      });
+
+      const result = await previewEmail({ ...inviteEnvelope, to: email });
+      setSending(false);
+      if (result && result.ok) {
+        setSent(true);
+        setTimeout(() => { onSent?.(); }, 800);
+      } else {
+        const reason = result?.error || 'Email dispatch failed.';
+        setErrorMsg(
+          reason.startsWith('network:')
+            ? 'Could not reach the email server. Make sure the backend is running on port 5000.'
+            : `Email could not be sent: ${reason}`
+        );
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[ResendInvite] failed to send email:', err);
+      setSending(false);
+      setErrorMsg(err?.message || 'Email could not be sent.');
+    }
   };
 
   return (
@@ -629,9 +679,16 @@ function ResendInviteModal({ appointmentRow, onClose, onSent }) {
           </p>
         </div>
 
+        {errorMsg && !sent && (
+          <div className="mb-3 flex items-start gap-2 rounded-[10px] border border-red-200 bg-red-50 px-3 py-2.5 text-[12px] font-semibold text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+            <AlertTriangle size={14} aria-hidden="true" className="mt-0.5 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
         {sent ? (
           <div className="flex items-center gap-2 rounded-[10px] border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[13px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
-            <CheckCircle2 size={16} aria-hidden="true" /> Email client opened. Invite sent!
+            <CheckCircle2 size={16} aria-hidden="true" /> Invitation email sent successfully!
           </div>
         ) : (
           <div className="flex justify-end gap-2">

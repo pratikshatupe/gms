@@ -10,6 +10,15 @@ import {
 import { addAuditLog } from '../../utils/auditLogger';
 import { generateTempPassword, DIAL_CODES } from '../../utils/requestValidation';
 import { generateStaffInviteEmail, previewEmail } from '../../utils/emailTemplates';
+/* Phase 2 strict validators. The local sanitizeEmail / sanitizePhone /
+ * sanitizeName helpers below are kept (they're tuned for this drawer's
+ * setField pipeline); the strict format/length/fake-number rules
+ * imported here are layered into validateStaffForm. */
+import {
+  validateName as validatePersonNameStrict,
+  validateEmail as validateEmailStrict,
+  validatePhoneIndian,
+} from '../../utils/validators';
 
 export const ALL_STAFF_ROLES = ['Director', 'Manager', 'Reception', 'Service Staff'];
 
@@ -147,20 +156,18 @@ export function validateStaffForm(form, allStaff, orgId, offices = [], opts = {}
   const joiningDate = String(form.joiningDate || '').trim();
   const status = String(form.status || '').trim();
 
-  if (isBlank(fullName)) {
-    e.fullName = 'Full Name is required.';
-  } else if (fullName.length < 2 || fullName.length > 100) {
-    e.fullName = 'Full Name must be 2 to 100 characters.';
-  } else if (!NAME_RE.test(fullName)) {
-    e.fullName = 'Full Name accepts letters only.';
+  /* Phase 2 spec: 2–50 letters/spaces/dots/hyphens/apostrophes, must
+   * start with a letter. */
+  const fullNameErr = validatePersonNameStrict(fullName, { label: 'Full Name', min: 2, max: 50 });
+  if (fullNameErr) {
+    e.fullName = fullNameErr;
   }
 
-  if (isBlank(email)) {
-    e.emailId = 'Email ID is required.';
-  } else if (email.length > 100) {
-    e.emailId = 'Email ID must be 100 characters or fewer.';
-  } else if (!EMAIL_RE.test(email)) {
-    e.emailId = 'Please enter a valid Email ID.';
+  /* Phase 2 spec: required, no whitespace, lowercased, valid format,
+   * <=200 chars. Layered with the existing org-uniqueness check. */
+  const emailErr = validateEmailStrict(email, { label: 'Email ID' });
+  if (emailErr) {
+    e.emailId = emailErr;
   } else {
     const dup = (allStaff || []).find(
       (s) =>
@@ -172,15 +179,12 @@ export function validateStaffForm(form, allStaff, orgId, offices = [], opts = {}
     if (dup) e.emailId = 'Email ID already exists in your organisation.';
   }
 
-  if (isBlank(contact)) {
-    e.contactNumber = 'Contact Number is required.';
-  } else if (!/^\+?[\d\s-]+$/.test(contact)) {
-    e.contactNumber = 'Contact Number accepts digits, spaces and hyphens only.';
-  } else if (contactDigits.length < 7 || contactDigits.length > 15) {
-    e.contactNumber = 'Contact Number must be 7 to 15 digits.';
-  } else if (/^0+$/.test(contactDigits)) {
-    e.contactNumber = 'Contact Number cannot be all zeros.';
-  }
+  /* Phase 2 spec: exactly 10 digits, must start with 6/7/8/9, blocks
+   * known repeated/sequential fakes (0000…, 1111…, 1234567890, etc.).
+   * The setField pipeline still allows users to TYPE spaces/hyphens —
+   * we strip non-digits inside the validator. */
+  const phoneErr = validatePhoneIndian(contactDigits, { label: 'Contact Number' });
+  if (phoneErr) e.contactNumber = phoneErr;
 
   if (form.dateOfBirth) {
     const dob = new Date(`${form.dateOfBirth}T00:00:00`);
@@ -380,7 +384,7 @@ export default function AddStaffDrawer({ open, onClose, onCreated, currentUser }
   const setField = (key, value) => {
     let nextValue = value;
 
-    if (key === 'fullName') nextValue = sanitizeName(value).slice(0, 100);
+    if (key === 'fullName') nextValue = sanitizeName(value).slice(0, 50);
     if (key === 'emailId') nextValue = sanitizeEmail(value).slice(0, 100);
     if (key === 'contactNumber') nextValue = sanitizePhone(value).slice(0, 20);
     if (key === 'designation') nextValue = sanitizeDesignation(value).slice(0, 50);
@@ -485,8 +489,24 @@ export default function AddStaffDrawer({ open, onClose, onCreated, currentUser }
       orgId,
     });
 
+    /* The drawer persists the staff record via useCollection (localStorage)
+     * and never calls the backend /users endpoint, so the server-side
+     * STAFF_INVITE email in user.service.js never fires for this flow.
+     * Dispatch the branded invite from the client when the user opted in.
+     * We await the result so failures surface as a toast instead of
+     * silently dropping while the temp-password reveal screen lies. */
     if (cleanedForm.sendInviteEmail) {
-      previewEmail(generateStaffInviteEmail(record, tempPassword, org));
+      const org = (MOCK_ORGANIZATIONS || []).find((o) => o?.id === orgId) || null;
+      const result = await previewEmail(generateStaffInviteEmail(record, tempPassword, org));
+      if (!result || !result.ok) {
+        const reason = result?.error || 'unknown error';
+        const friendly = String(reason).startsWith('network:')
+          ? 'Staff added, but the invite email could not be sent — backend not reachable on port 5000.'
+          : `Staff added, but the invite email failed: ${reason}`;
+        setToast({ type: 'error', msg: friendly });
+      } else {
+        setToast({ type: 'success', msg: `Invite email sent to ${record.emailId}.` });
+      }
     }
 
     setSaving(false);

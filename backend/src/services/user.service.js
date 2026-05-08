@@ -36,38 +36,48 @@ async function createUser(payload, organizationId, actor) {
     createdBy: actor ? actor._id : undefined,
   });
 
-  // Bug 7 fix: send staff invitation email (fire-and-forget)
-  (async () => {
-    try {
-      const Organization = require('../models/Organization');
-      const emailTemplates = require('../templates/email.templates');
-      const env = require('../config/env');
-      const logger = require('../config/logger');
-      const notificationService = require('./notification.service');
+  /* Bug 2 fix — duplicate Staff Invite email. The frontend
+   * AddStaffDrawer calls previewEmail(generateStaffInviteEmail(...))
+   * to dispatch the branded invite via /api/v1/notifications/dispatch.
+   * If we ALSO sent one here, the recipient got two emails. Now this
+   * path only fires when the API caller explicitly opts in by passing
+   * `sendInviteEmail: true` in the payload. The frontend deliberately
+   * omits the flag because it owns the dispatch; backend-only callers
+   * (cron, scripts, server-side admin tools) can set it to true to
+   * keep the previous behaviour. */
+  if (payload.sendInviteEmail === true) {
+    (async () => {
+      try {
+        const Organization = require('../models/Organization');
+        const emailTemplates = require('../templates/email.templates');
+        const env = require('../config/env');
+        const logger = require('../config/logger');
+        const notificationService = require('./notification.service');
 
-      const org = organizationId ? await Organization.findById(organizationId).select('name slug') : null;
-      const inviteLink = env.clientUrl ? `${env.clientUrl}/login?email=${encodeURIComponent(user.email)}` : null;
+        const org = organizationId ? await Organization.findById(organizationId).select('name slug') : null;
+        const inviteLink = env.clientUrl ? `${env.clientUrl}/login?email=${encodeURIComponent(user.email)}` : null;
 
-      const tpl = emailTemplates.STAFF_INVITE({
-        name: user.name,
-        email: user.email,
-        role: payload.role,
-        tempPassword: payload.password ? null : password,
-        orgName: org?.name || 'CorpGMS',
-        inviteLink,
-      });
+        const tpl = emailTemplates.STAFF_INVITE({
+          name: user.name,
+          email: user.email,
+          role: payload.role,
+          tempPassword: payload.password ? null : password,
+          orgName: org?.name || 'CorpGMS',
+          inviteLink,
+        });
 
-      await notificationService.sendEmail({
-        to: user.email,
-        subject: tpl.subject,
-        html: tpl.html,
-        text: tpl.text,
-      });
-      logger.info(`Staff invite email queued for ${user.email}`);
-    } catch (err) {
-      try { require('../config/logger').error('Staff invite email failed: ' + (err?.message || err)); } catch {}
-    }
-  })();
+        await notificationService.sendEmail({
+          to: user.email,
+          subject: tpl.subject,
+          html: tpl.html,
+          text: tpl.text,
+        });
+        logger.info(`Staff invite email queued for ${user.email}`);
+      } catch (err) {
+        try { require('../config/logger').error('Staff invite email failed: ' + (err?.message || err)); } catch {}
+      }
+    })();
+  }
 
   return { user, tempPassword: payload.password ? null : password };
 }

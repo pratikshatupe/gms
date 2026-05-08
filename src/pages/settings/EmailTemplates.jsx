@@ -229,8 +229,15 @@ function readTemplates() {
     const out = {};
     for (const t of TEMPLATES) {
       const stored  = parsed?.[t.key] || {};
-      const subject = stored.subject || t.defaults.subject;
-      const body    = stored.body    || t.defaults.body;
+      /* Defensive: subject and body must be plain strings. If a malformed
+       * payload stored an object/array (e.g. the whole envelope), fall
+       * back to the default so the editor never round-trips garbage. */
+      const subject = (typeof stored.subject === 'string' && stored.subject)
+        ? stored.subject
+        : t.defaults.subject;
+      const storedBody = typeof stored.body === 'string' ? stored.body.trim() : '';
+      const isJsonShaped = storedBody.startsWith('{') || storedBody.startsWith('[');
+      const body = (storedBody && !isJsonShaped) ? stored.body : t.defaults.body;
       const blocks  = Array.isArray(stored.blocks) && stored.blocks.length > 0
         ? stored.blocks.map((b) => ({ id: b?.id || blockId(), html: String(b?.html || '') }))
         : bodyToBlocks(body);

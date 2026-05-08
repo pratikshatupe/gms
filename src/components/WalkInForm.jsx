@@ -1,6 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { APPOINTMENT_PURPOSES, STAFF_LIST } from '../data/mockAppointments';
-import { validatePhone, PHONE_ERROR_MSG } from '../utils/validators';
+/* Phase 2 spec: walk-in guest fields use the strict Indian-phone rule
+ * (10 digits, starts with 6/7/8/9, blocks fakes) and the strict
+ * person-name rule (2–50 letters/spaces/.'-). */
+import {
+  validatePhoneIndian,
+  validateName as validatePersonNameStrict,
+} from '../utils/validators';
 
 export const ID_TYPES = [
   'Emirates ID',
@@ -22,13 +28,16 @@ const EMPTY_FORM = Object.freeze({
 
 function validate(form) {
   const errors = {};
-  if (!form.guestName.trim())     errors.guestName     = 'Guest Name is required.';
-  if (!form.contactNumber.trim()) errors.contactNumber = 'Contact Number is required.';
-  else if (!validatePhone(form.contactNumber.trim()))
-    errors.contactNumber = PHONE_ERROR_MSG;
-  if (!form.companyName.trim())   errors.companyName   = 'Company Name is required.';
-  if (!form.purpose)              errors.purpose       = 'Purpose is required.';
-  if (!form.host)                 errors.host          = 'Host is required.';
+
+  const nameErr = validatePersonNameStrict(form.guestName, { label: 'Guest Name', min: 2, max: 50 });
+  if (nameErr) errors.guestName = nameErr;
+
+  const phoneErr = validatePhoneIndian(form.contactNumber, { label: 'Contact Number' });
+  if (phoneErr) errors.contactNumber = phoneErr;
+
+  if (!form.companyName.trim()) errors.companyName = 'Company Name is required.';
+  if (!form.purpose)            errors.purpose     = 'Purpose is required.';
+  if (!form.host)               errors.host        = 'Host is required.';
   if (form.idType && !form.idNumber.trim()) {
     errors.idNumber = 'ID Number is required when ID Type is selected.';
   }

@@ -23,6 +23,8 @@ import {
 import {
   generateAppointmentApproved,
   generateAppointmentCancelled,
+  generateAppointmentCheckedOut,
+  generateAppointmentReminder,
   generateWalkInArrived,
   generateVipPending,
   generateReportReady,
@@ -37,14 +39,69 @@ const MANAGEMENT_ROLES  = ['superadmin', 'director', 'manager', 'reception'];
 const DIRECTOR_AND_MGR  = ['superadmin', 'director', 'manager'];
 const DIRECTOR_ONLY     = ['superadmin', 'director'];
 
+/**
+ * Fire the actual email dispatch (and log a preview in dev). Previously
+ * this was a console.log-only helper gated to DEV builds — which is why
+ * production triggers like APPROVE / CANCEL / WALKIN never sent real
+ * emails. We now POST the envelope to the backend dispatch endpoint
+ * regardless of NODE_ENV. The send is fire-and-forget; failures are
+ * logged but never block the calling flow.
+ *
+ * Defensive guard: only dispatch when the envelope has a recipient,
+ * subject, and a plausible HTML body — otherwise we'd POST garbage to
+ * the backend and the recipient would see raw source.
+ */
 function emailPreview(kind, envelope) {
   if (!envelope) return;
-  if (!import.meta.env.DEV) return;
+  /* Dev-only console preview, kept for debugging. */
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV) {
+    try {
+      // eslint-disable-next-line no-console
+      console.log(`[email-preview] ${kind}`, envelope);
+    } catch { /* no-op */ }
+  }
+  if (
+    !envelope.to ||
+    !envelope.subject ||
+    !envelope.html ||
+    typeof envelope.html !== 'string' ||
+    !envelope.html.includes('<')
+  ) {
+    return;
+  }
   try {
-    /* Grouped console tag so devs can filter DevTools by "email-preview". */
+    const base =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) ||
+      '/api/v1';
+    fetch(`${base}/notifications/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to:      envelope.to,
+        subject: envelope.subject,
+        html:    envelope.html,
+        text:    envelope.text || '',
+      }),
+    })
+      .then(async (res) => {
+        let body = {};
+        try { body = await res.json(); } catch { /* ignore */ }
+        if (!res.ok || body.success === false) {
+          // eslint-disable-next-line no-console
+          console.warn(`[email] ${kind} dispatch error:`, res.status, body);
+        } else {
+          // eslint-disable-next-line no-console
+          console.info(`[email] ${kind} dispatched to ${envelope.to}`);
+        }
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[email] ${kind} network error:`, err && err.message ? err.message : err);
+      });
+  } catch (err) {
     // eslint-disable-next-line no-console
-    console.log(`[email-preview] ${kind}`, envelope);
-  } catch { /* no-op */ }
+    console.warn(`[email] ${kind} dispatch threw synchronously:`, err);
+  }
 }
 
 /**
@@ -162,6 +219,48 @@ export function useNotificationTriggers() {
     return true;
   }, [pushIfAllowed, sendEmailIfAllowed, actorName, orgId]);
 
+  /** Appointment checked out — visitor thank-you + management awareness.
+   *  Fired only when an appointment transitions to Completed (the
+   *  "Checked Out" event in the user-facing taxonomy). NOTE: we do NOT
+   *  fire any email when the appointment transitions to Checked-In —
+   *  that step is silent by design. */
+  const fireAppointmentCheckedOut = useCallback((ctx = {}) => {
+    const { apt, org, hostStaffId } = ctx;
+    if (!apt) return false;
+    pushIfAllowed(NOTIFICATION_TYPES.APPOINTMENT_CHECKED_OUT, {
+      type:      NOTIFICATION_TYPES.APPOINTMENT_CHECKED_OUT,
+      title:     'Appointment checked out',
+      message:   `${apt.visitorName || 'Visitor'} has checked out${apt.hostName ? ` after meeting ${apt.hostName}` : ''}.`,
+      actorName,
+      link:      { page: 'appointments', params: { viewId: apt.id } },
+      roles:     MANAGEMENT_ROLES,
+      staffId:   hostStaffId || null,
+      orgId:     apt.organisationId || orgId,
+    });
+    sendEmailIfAllowed(NOTIFICATION_TYPES.APPOINTMENT_CHECKED_OUT, 'appointment-checked-out',
+      generateAppointmentCheckedOut({ apt, actorName, org }));
+    return true;
+  }, [pushIfAllowed, sendEmailIfAllowed, actorName, orgId]);
+
+  /** Appointment reminder — visitor only. Daily nudge driven by the
+   *  reminder loop until the appointment date arrives. */
+  const fireAppointmentReminder = useCallback((ctx = {}) => {
+    const { apt, daysUntil, org } = ctx;
+    if (!apt) return false;
+    pushIfAllowed(NOTIFICATION_TYPES.APPOINTMENT_REMINDER, {
+      type:      NOTIFICATION_TYPES.APPOINTMENT_REMINDER,
+      title:     'Appointment reminder',
+      message:   `${apt.visitorName || 'Visitor'} has an appointment ${daysUntil === 0 ? 'today' : daysUntil === 1 ? 'tomorrow' : `in ${daysUntil} days`} at ${apt.timeStart || ''}.`,
+      actorName,
+      link:      { page: 'appointments', params: { viewId: apt.id } },
+      roles:     MANAGEMENT_ROLES,
+      orgId:     apt.organisationId || orgId,
+    });
+    sendEmailIfAllowed(NOTIFICATION_TYPES.APPOINTMENT_REMINDER, 'appointment-reminder',
+      generateAppointmentReminder({ apt, daysUntil, org }));
+    return true;
+  }, [pushIfAllowed, sendEmailIfAllowed, actorName, orgId]);
+
   /** Appointment cancelled — visitor email + management broadcast. */
   const fireAppointmentCancelled = useCallback((ctx = {}) => {
     const { apt, reason, org } = ctx;
@@ -259,6 +358,8 @@ export function useNotificationTriggers() {
   return {
     fireAppointmentApproved,
     fireAppointmentCancelled,
+    fireAppointmentCheckedOut,
+    fireAppointmentReminder,
     fireWalkInArrived,
     fireVipPending,
     fireReportReady,

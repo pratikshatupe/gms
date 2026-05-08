@@ -1,12 +1,61 @@
 'use strict';
 
+const crypto = require('crypto');
 const Organization = require('../models/Organization');
 const Subscription = require('../models/Subscription');
 const User = require('../models/User');
 const Office = require('../models/Office');
 const Appointment = require('../models/Appointment');
 const ApiError = require('../utils/ApiError');
+const env = require('../config/env');
+const logger = require('../config/logger');
 const planService = require('./plan.service');
+
+/* Razorpay is loaded lazily so the backend can boot in environments
+ * where the SDK isn't installed and no payments are expected (demo /
+ * dev / CI). The require, the missing-keys check, and the missing-
+ * package check all surface only when payment is actually attempted —
+ * not at server start. This keeps `npm run dev` working without razorpay
+ * present and without RAZORPAY_KEY_ID/SECRET in .env. */
+let razorpayClient = null;
+let razorpaySdkLoadError = null;
+function loadRazorpaySdk() {
+  if (razorpaySdkLoadError) return null;
+  try {
+    return require('razorpay');
+  } catch (err) {
+    razorpaySdkLoadError = err;
+    logger.warn(
+      `[razorpay] SDK not installed (${err && err.message ? err.message : err}). ` +
+      `Run "npm install razorpay" inside backend/ to enable real payments. ` +
+      `Backend will boot fine; payment endpoints will return a clear error.`
+    );
+    return null;
+  }
+}
+/* Try once at module load so the warning shows in the boot log without
+ * blocking startup. */
+loadRazorpaySdk();
+
+function getRazorpayClient() {
+  if (razorpayClient) return razorpayClient;
+  const Razorpay = loadRazorpaySdk();
+  if (!Razorpay) {
+    throw ApiError.internal(
+      'Razorpay SDK is not installed on the server. Run "npm install razorpay" in backend/ to enable payments.'
+    );
+  }
+  if (!env.razorpay.keyId || !env.razorpay.keySecret) {
+    throw ApiError.internal(
+      'Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in backend/.env.'
+    );
+  }
+  razorpayClient = new Razorpay({
+    key_id:     env.razorpay.keyId,
+    key_secret: env.razorpay.keySecret,
+  });
+  return razorpayClient;
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -255,6 +304,158 @@ async function listAll({ plan, status, organisationId } = {}) {
     .lean();
 }
 
+/* ────────────────────────────────────────────────────────────────────
+ *   Razorpay payment integration
+ *
+ *   Two-stage flow (server-driven so the key secret never leaves the
+ *   backend and the activation can never be spoofed by a client):
+ *
+ *     1. createRazorpayOrder — client requests an order amount derived
+ *        from the resolved Plan + billingCycle. Backend creates a
+ *        Razorpay Order via the SDK and returns { orderId, amount,
+ *        currency, keyId } so the frontend can launch Checkout.
+ *
+ *     2. verifyAndActivate — after the user finishes Checkout, the
+ *        client posts the { order_id, payment_id, signature } triple.
+ *        Backend re-computes the HMAC-SHA256 signature with the key
+ *        secret and only activates the plan when it matches. The
+ *        razorpay_payment_id is stored as both transactionId and
+ *        razorpayPaymentId so existing reports keep working.
+ * ──────────────────────────────────────────────────────────────────── */
+
+async function createRazorpayOrder(organisationId, payload = {}) {
+  const org = await Organization.findById(organisationId);
+  if (!org) throw ApiError.notFound('Organization not found');
+
+  const plan = await resolvePlan(payload);
+  const billingCycle = payload.billingCycle === 'yearly' ? 'yearly' : 'monthly';
+  const amount = billingCycle === 'yearly'
+    ? Number(plan.yearlyPrice || (plan.price * 12)) || 0
+    : Number(plan.price) || 0;
+
+  if (amount <= 0) {
+    throw ApiError.badRequest(
+      'Selected plan has no payable amount — free plans should activate without a payment.'
+    );
+  }
+
+  /* Razorpay expects `amount` in the smallest currency unit (paise for
+   * INR, cents for USD/EUR). Multiply, round, and floor at zero to
+   * defend against rogue float values. */
+  const currency = (payload.currency || plan.currency || 'INR').toUpperCase();
+  const amountInPaise = Math.max(0, Math.round(amount * 100));
+
+  /* Receipt is a free-form string (max 40 chars per Razorpay spec).
+   * We embed the org id + a timestamp so support can correlate without
+   * leaking PII. The id is sliced because Mongo ObjectIds are 24 chars. */
+  const receipt = `gms_${String(organisationId).slice(-12)}_${Date.now()}`.slice(0, 40);
+
+  const rzp = getRazorpayClient();
+  let order;
+  try {
+    order = await rzp.orders.create({
+      amount:   amountInPaise,
+      currency,
+      receipt,
+      notes: {
+        organisationId: String(organisationId),
+        planId:         String(plan._id),
+        planName:       String(plan.name || ''),
+        billingCycle,
+      },
+    });
+  } catch (err) {
+    /* Razorpay errors come back as { statusCode, error: { description } }.
+     * Map to a 400 so the client gets a meaningful message instead of
+     * a generic 500. */
+    const description = err?.error?.description || err?.message || 'Razorpay order creation failed';
+    logger.error(`[razorpay] orders.create failed: ${description}`);
+    throw ApiError.badRequest(description);
+  }
+
+  return {
+    orderId:  order.id,
+    amount:   order.amount,
+    currency: order.currency,
+    receipt:  order.receipt,
+    keyId:    env.razorpay.keyId,
+    plan: {
+      id:       String(plan._id),
+      name:     plan.name,
+      billingCycle,
+    },
+  };
+}
+
+async function verifyAndActivate(organisationId, payload = {}, actor) {
+  const {
+    razorpay_order_id:   orderId,
+    razorpay_payment_id: paymentId,
+    razorpay_signature:  signature,
+  } = payload || {};
+
+  if (!orderId || !paymentId || !signature) {
+    throw ApiError.badRequest('Missing Razorpay payment credentials');
+  }
+  if (!env.razorpay.keySecret) {
+    throw ApiError.internal('Razorpay key secret not configured on the server');
+  }
+
+  /* Re-compute the HMAC server-side. The signature we compare against
+   * is what Razorpay attached to the success callback; matching it
+   * proves the payload came from Razorpay and was not tampered with on
+   * the client. */
+  const body = `${orderId}|${paymentId}`;
+  const expectedSignature = crypto
+    .createHmac('sha256', env.razorpay.keySecret)
+    .update(body)
+    .digest('hex');
+
+  /* Constant-time compare to avoid leaking timing info on the secret. */
+  const sigBuf = Buffer.from(signature, 'utf8');
+  const expBuf = Buffer.from(expectedSignature, 'utf8');
+  const sigOk = sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
+
+  if (!sigOk) {
+    logger.warn(`[razorpay] signature mismatch for order=${orderId} payment=${paymentId}`);
+    throw ApiError.badRequest('Payment verification failed');
+  }
+
+  /* Hand off to changePlan so all the existing audit / org-mirroring /
+   * subscription-rotation logic runs unchanged. paymentMethod=CARD is
+   * the catch-all because Razorpay returns the actual instrument only
+   * via the payment-fetch API (which we deliberately don't call from
+   * the verify endpoint to keep latency low). */
+  const result = await changePlan(
+    organisationId,
+    {
+      planId:        payload.planId,
+      planName:      payload.planName,
+      billingCycle:  payload.billingCycle,
+      currency:      payload.currency,
+      paymentMethod: 'CARD',
+      transactionId: paymentId,
+    },
+    actor,
+  );
+
+  /* Backfill the Razorpay-specific fields on the freshly-created
+   * payment row so an audit trail exists. changePlan already pushed
+   * one row into payments[]; we patch it in place rather than adding
+   * a duplicate. */
+  const sub = result.subscription;
+  if (sub && Array.isArray(sub.payments) && sub.payments.length > 0) {
+    const last = sub.payments[sub.payments.length - 1];
+    last.razorpayOrderId   = orderId;
+    last.razorpayPaymentId = paymentId;
+    last.razorpaySignature = signature;
+    await sub.save();
+  }
+
+  logger.info(`[razorpay] verified payment=${paymentId} for org=${organisationId}`);
+  return result;
+}
+
 module.exports = {
   createForOrganization,
   getSubscription,
@@ -263,4 +464,6 @@ module.exports = {
   getUsage,
   listPaymentHistory,
   listAll,
+  createRazorpayOrder,
+  verifyAndActivate,
 };

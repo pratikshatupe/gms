@@ -6,6 +6,16 @@ import { MOCK_ORGANIZATIONS, MOCK_APPOINTMENTS, MOCK_SERVICES } from '../../data
 import { addAuditLog } from '../../utils/auditLogger';
 import { Toast, ConfirmModal } from '../../components/ui';
 import { getTimezoneAbbr } from '../../utils/appointmentState';
+/* Phase 2 strict validators for the Organisation Profile form. The
+ * earlier validate() only checked org-name length and a loose email
+ * regex; the strict rules below tighten that to match the spec. */
+import {
+  validateOrgName,
+  validateEmail,
+  sanitizeEmail,
+  validatePhoneByCountry,
+  validateAddress,
+} from '../../utils/validators';
 
 const LOGO_MAX_BYTES = 200 * 1024;
 
@@ -81,9 +91,42 @@ export default function OrganisationProfileTab({ canEdit = true }) {
 
   const validate = (next) => {
     const e = {};
-    if (!next.orgName || !next.orgName.trim()) e.orgName = 'Organisation Name is required.';
-    else if (next.orgName.length > 120) e.orgName = 'Organisation Name must be 120 characters or fewer.';
-    if (next.contactEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(next.contactEmail)) e.contactEmail = 'Enter a valid Email ID.';
+
+    /* Phase 2 spec: org name 2–100, alphanumeric + & . - _ + space. */
+    const orgErr = validateOrgName(next.orgName, { label: 'Organisation Name', min: 2, max: 100 });
+    if (orgErr) e.orgName = orgErr;
+
+    /* Email is optional on this tab, but enforce strict format when
+     * present (no internal whitespace, valid format, length cap). */
+    if (next.contactEmail && next.contactEmail.trim()) {
+      const emailErr = validateEmail(next.contactEmail, { label: 'Email ID', required: false });
+      if (emailErr) e.contactEmail = emailErr;
+    }
+
+    /* Phone is optional. When present, validate against the chosen
+     * country: Indian numbers go through the strict 10-digit + 6/7/8/9
+     * + fake-block rule; international tenants get the 7–15 fallback. */
+    if (next.contactPhone && next.contactPhone.trim()) {
+      const phoneErr = validatePhoneByCountry(next.contactPhone, next.country, {
+        label: 'Contact Number', required: false,
+      });
+      if (phoneErr) e.contactPhone = phoneErr;
+    }
+
+    /* Address lines optional; if filled, enforce 5–250 characters. */
+    if (next.addressLine1 && next.addressLine1.trim()) {
+      const addr1Err = validateAddress(next.addressLine1, {
+        label: 'Address Line 1', min: 5, max: 250, required: false,
+      });
+      if (addr1Err) e.addressLine1 = addr1Err;
+    }
+    if (next.addressLine2 && next.addressLine2.trim()) {
+      const addr2Err = validateAddress(next.addressLine2, {
+        label: 'Address Line 2', min: 5, max: 250, required: false,
+      });
+      if (addr2Err) e.addressLine2 = addr2Err;
+    }
+
     if (next.postalCode && next.postalCode.length > 20) e.postalCode = 'Postal Code must be 20 characters or fewer.';
     if (!next.timezone || !TIMEZONES.includes(next.timezone)) e.timezone = 'Select a valid timezone.';
     if (!next.currency || !CURRENCIES.find((c) => c.value === next.currency)) e.currency = 'Select a valid currency.';
@@ -174,10 +217,10 @@ export default function OrganisationProfileTab({ canEdit = true }) {
             <Input value={draft.tradingName || ''} onChange={(e) => set('tradingName', e.target.value)} placeholder="Enter Trading Name" disabled={!canEdit} />
           </Field>
           <Field label="Email ID" error={errors.contactEmail}>
-            <Input type="email" value={draft.contactEmail || ''} onChange={(e) => set('contactEmail', e.target.value)} placeholder="Enter Email ID" disabled={!canEdit} invalid={Boolean(errors.contactEmail)} />
+            <Input type="email" value={draft.contactEmail || ''} onChange={(e) => set('contactEmail', sanitizeEmail(e.target.value))} placeholder="Enter Email ID" disabled={!canEdit} invalid={Boolean(errors.contactEmail)} maxLength={200} />
           </Field>
-          <Field label="Contact Number">
-            <Input type="tel" value={draft.contactPhone || ''} onChange={(e) => set('contactPhone', e.target.value)} placeholder="Enter Contact Number" disabled={!canEdit} />
+          <Field label="Contact Number" error={errors.contactPhone}>
+            <Input type="tel" value={draft.contactPhone || ''} onChange={(e) => set('contactPhone', e.target.value)} placeholder="Enter Contact Number" disabled={!canEdit} invalid={Boolean(errors.contactPhone)} maxLength={20} />
           </Field>
         </div>
       </Card>
@@ -213,11 +256,11 @@ export default function OrganisationProfileTab({ canEdit = true }) {
         <h2 className="text-[15px] font-extrabold text-[#0C2340] dark:text-slate-100">Registered Address</h2>
         <p className="mt-0.5 text-[12px] text-slate-400 dark:text-slate-500">Used on invoices and compliance documents.</p>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <Field label="Address Line 1">
-            <Input value={draft.addressLine1 || ''} onChange={(e) => set('addressLine1', e.target.value)} placeholder="Enter Address Line 1" disabled={!canEdit} maxLength={200} />
+          <Field label="Address Line 1" error={errors.addressLine1}>
+            <Input value={draft.addressLine1 || ''} onChange={(e) => set('addressLine1', e.target.value)} placeholder="Enter Address Line 1" disabled={!canEdit} invalid={Boolean(errors.addressLine1)} maxLength={250} />
           </Field>
-          <Field label="Address Line 2">
-            <Input value={draft.addressLine2 || ''} onChange={(e) => set('addressLine2', e.target.value)} placeholder="Enter Address Line 2" disabled={!canEdit} maxLength={200} />
+          <Field label="Address Line 2" error={errors.addressLine2}>
+            <Input value={draft.addressLine2 || ''} onChange={(e) => set('addressLine2', e.target.value)} placeholder="Enter Address Line 2" disabled={!canEdit} invalid={Boolean(errors.addressLine2)} maxLength={250} />
           </Field>
           <Field label="City">
             <Input value={draft.city || ''} onChange={(e) => set('city', e.target.value)} placeholder="Enter City" disabled={!canEdit} maxLength={80} />

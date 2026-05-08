@@ -26,4 +26,11 @@ router.post('/change-plan',      authorize(ROLES.SUPER_ADMIN, ROLES.DIRECTOR), c
 router.post('/cancel',           authorize(ROLES.SUPER_ADMIN, ROLES.DIRECTOR), ctrl.cancel);
 router.get('/usage',             authorize(ROLES.SUPER_ADMIN, ROLES.DIRECTOR, ROLES.MANAGER), ctrl.usage);
 
+/* Razorpay payment lifecycle. createOrder mints the Razorpay order,
+ * verifyPayment validates the HMAC signature and activates the plan.
+ * Both gated to SuperAdmin / Director (the only roles that can edit
+ * billing). */
+router.post('/create-order',     authorize(ROLES.SUPER_ADMIN, ROLES.DIRECTOR), ctrl.createOrder);
+router.post('/verify-payment',   authorize(ROLES.SUPER_ADMIN, ROLES.DIRECTOR), ctrl.verifyPayment);
+
 module.exports = router;

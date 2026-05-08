@@ -13,6 +13,12 @@ import {
 import { addAuditLog } from '../../utils/auditLogger';
 import { useNotificationTriggers } from '../../utils/notificationTriggers';
 import { previewEmail, generateAppointmentInviteEmail } from '../../utils/emailTemplates';
+/* Phase 2 strict validators for visitor identity fields. */
+import {
+  validateName as validatePersonNameStrict,
+  validateEmail as validateEmailStrict,
+  validatePhoneIndian,
+} from '../../utils/validators';
 import {
   byOrg, VISITOR_TYPES, APPROVAL_MODES, DEFAULT_CHECKIN_SETTINGS,
   resolveApprovalRequired, detectRoomConflict, detectHostConflict,
@@ -58,11 +64,13 @@ function sanitizePersonName(value) {
     .replace(/[^A-Za-z .'-]/g, '')
     .replace(/\s+/g, ' ')
     .replace(/^\s+/g, '')
-    .slice(0, 100);
+    /* Phase 2 spec: visitor name max 50 characters. */
+    .slice(0, 50);
 }
 
 function sanitizeEmail(value) {
-  return String(value || '').trim().toLowerCase().slice(0, 100);
+  /* Phase 2 spec: lowercase + strip ALL whitespace (not just trim). */
+  return String(value || '').replace(/\s+/g, '').toLowerCase().slice(0, 200);
 }
 
 function sanitizePhone(value) {
@@ -152,27 +160,30 @@ export function validateAppointmentForm(form, opts = {}) {
       .map((s) => s.id)
   );
 
-  if (isBlank(visitorName)) {
-    e['visitor.fullName'] = 'Visitor Name is required.';
-  } else if (visitorName.length < 2 || visitorName.length > 100) {
-    e['visitor.fullName'] = 'Visitor Name must be 2 to 100 characters.';
-  } else if (!NAME_RE.test(visitorName)) {
-    e['visitor.fullName'] = "Visitor Name accepts letters, spaces and .' - only.";
+  /* Phase 2 spec: 2–50 letters/spaces/dots/hyphens/apostrophes,
+   * starting with a letter. */
+  const nameErr = validatePersonNameStrict(visitorName, { label: 'Visitor Name', min: 2, max: 50 });
+  if (nameErr) e['visitor.fullName'] = nameErr;
+
+  /* Visitor email is conditionally required: blank is fine ONLY when
+   * the user has explicitly turned off "Send invitation email" on the
+   * Invitation card. The strict format check still runs whenever a
+   * value is present so a typo doesn't slip through. */
+  const wantsInviteEmail = Boolean(form.invitation?.sendEmail);
+  if (!email) {
+    if (wantsInviteEmail) {
+      e['visitor.emailId'] = 'Email ID is required when "Send invitation email" is enabled.';
+    }
+  } else {
+    const emailErr = validateEmailStrict(email, { label: 'Email ID' });
+    if (emailErr) e['visitor.emailId'] = emailErr;
   }
 
-  if (email && !EMAIL_RE.test(email)) {
-    e['visitor.emailId'] = 'Please enter a valid Email ID.';
-  }
-
-  if (isBlank(contact)) {
-    e['visitor.contactNumber'] = 'Contact Number is required.';
-  } else if (!/^\+?[\d\s-]+$/.test(contact)) {
-    e['visitor.contactNumber'] = 'Contact Number accepts digits, spaces and hyphens only.';
-  } else if (contactDigits.length < 7 || contactDigits.length > 15) {
-    e['visitor.contactNumber'] = 'Contact Number must be 7 to 15 digits.';
-  } else if (/^0+$/.test(contactDigits)) {
-    e['visitor.contactNumber'] = 'Contact Number cannot be all zeros.';
-  }
+  /* Phase 2 spec: exactly 10 digits, starts with 6/7/8/9, blocks known
+   * fakes. The setField pipeline still allows users to type spaces/
+   * hyphens — the validator strips non-digits internally. */
+  const phoneErr = validatePhoneIndian(contactDigits, { label: 'Contact Number' });
+  if (phoneErr) e['visitor.contactNumber'] = phoneErr;
 
   if (companyName && companyName.length > 100) {
     e['visitor.companyName'] = 'Company Name must be 100 characters or fewer.';

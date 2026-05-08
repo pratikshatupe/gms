@@ -460,6 +460,16 @@ export default function TenantSubscription({ setActivePage }) {
     });
 
     setChangeTarget(null);
+
+    /* Razorpay upgrade verified server-side — pull the fresh
+     * Subscription doc from the backend so the page reflects the
+     * authoritative plan, period, and payment ledger. Demo / staff
+     * sessions (no backend token) skip this; their state was already
+     * patched into MOCK_ORGANIZATIONS above. */
+    if (kind === 'upgrade' && txnId && useBackendApi) {
+      triggerReload();
+    }
+
     if (kind === 'upgrade') {
       showToast(`Payment of ${formatPrice(cycle === 'yearly' ? pricingFor(plan, currency).annual : pricingFor(plan, currency).monthly, currency)} processed via ${gatewayFor(currency)}. Confirmation email sent.`, 'success');
     } else if (kind === 'downgrade') {

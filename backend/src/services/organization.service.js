@@ -10,6 +10,43 @@ const { buildSearchRegex } = require('../utils/helpers');
 const { ROLES } = require('../config/constants');
 const couponService = require('./coupon.service');
 const subscriptionService = require('./subscription.service');
+const env = require('../config/env');
+const logger = require('../config/logger');
+const notificationService = require('./notification.service');
+const emailTemplates = require('../templates/email.templates');
+
+/**
+ * Send a WELCOME email after a new organisation / director / user is
+ * provisioned. Wrapped in try/catch and resolves on its own — SMTP
+ * failures must NEVER block account creation. The actual outbound
+ * delivery flows through the existing nodemailer-backed
+ * notification.service.sendEmail, which falls back to a JSON-stream
+ * transport when SMTP creds are missing (so the envelope still appears
+ * in the boot log even in dev).
+ */
+async function sendWelcomeEmailSafe({ to, name, orgName, role, tempPassword }) {
+  if (!to) return;
+  try {
+    const tpl = emailTemplates.WELCOME({
+      name,
+      email: to,
+      orgName,
+      role,
+      tempPassword,
+      platformName: env.smtp.fromName || 'CorpGMS',
+      loginUrl: env.clientUrl ? `${env.clientUrl}/login` : null,
+    });
+    await notificationService.sendEmail({
+      to,
+      subject: tpl.subject,
+      html:    tpl.html,
+      text:    tpl.text,
+    });
+    logger.info(`[welcome-email] queued for ${to}`);
+  } catch (err) {
+    logger.error('[welcome-email] failed: ' + (err?.message || err));
+  }
+}
 
 /**
  * Resolve a coupon snapshot to embed on the organisation record.
@@ -87,6 +124,17 @@ async function createOrganization(payload, actor) {
 
   const subscription = await provisionSubscription(org._id, payload, actor);
 
+  /* Welcome email — fired after the org is fully provisioned. Address
+   * comes from the contactEmail field on the org record (no director
+   * was created in this branch). Non-blocking on SMTP failure. */
+  if (org.contactEmail) {
+    sendWelcomeEmailSafe({
+      to: org.contactEmail,
+      name: org.legalName || org.name || '',
+      orgName: org.name,
+    });
+  }
+
   return { ...org.toObject(), subscription };
 }
 
@@ -129,6 +177,15 @@ async function createOrganizationWithDirector(payload, actor) {
   }
 
   const subscription = await provisionSubscription(org._id, orgPayload, actor);
+
+  /* Welcome email to the new director. Non-blocking on SMTP failure. */
+  sendWelcomeEmailSafe({
+    to: user.email,
+    name: user.name,
+    orgName: org.name,
+    role: ROLES.DIRECTOR,
+    tempPassword: director.password ? null : tempPassword,
+  });
 
   return { organization: org, director: user, tempPassword, subscription };
 }

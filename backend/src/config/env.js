@@ -79,6 +79,17 @@ uri: required('MONGO_URI'),
     secret: process.env.WEBHOOK_SECRET || 'gms_webhook_secret_2024',
     timeoutMs: parseInt(process.env.WEBHOOK_TIMEOUT_MS || '10000', 10),
   },
+
+  /* Razorpay payment gateway. The key id is safe to expose to the
+   * frontend (it's the public identifier Razorpay Checkout needs) but
+   * the key secret MUST stay server-side — it's used for order
+   * creation and HMAC signature verification on the verify-payment
+   * endpoint. Test keys start with `rzp_test_`; rotate to live keys
+   * only when launching to production. */
+  razorpay: {
+    keyId:     process.env.RAZORPAY_KEY_ID     || '',
+    keySecret: process.env.RAZORPAY_KEY_SECRET || '',
+  },
 };
 
 module.exports = env;

@@ -66,11 +66,11 @@ const dispatch = async (req, res) => {
     if (!subject || typeof subject !== 'string') {
       return res.status(400).json({ success: false, message: '"subject" is required' });
     }
-    if (!html || typeof html !== 'string') {
-      logger.warn(`[notifications/dispatch] missing or non-string html — refusing to send. to=${to} typeof html=${typeof html}`);
+    if (!html || typeof html !== 'string' || !html.includes('<')) {
+      logger.warn(`[notifications/dispatch] html is empty or not valid HTML after sanitization — refusing. to=${to} typeof html=${typeof html} preview=${String(html).slice(0, 100)}`);
       return res.status(400).json({
         success: false,
-        message: '"html" body is required — pass the rendered template, not just plain text.',
+        message: '"html" body is required and must be valid HTML. It may have been stripped by a security middleware.',
       });
     }
 

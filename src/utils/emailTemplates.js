@@ -140,6 +140,29 @@ function htmlShell({ heading, bodyHtml, region, supportEmail, whatsapp }) {
 
 export const EMAIL_TEMPLATE_KEY = 'cgms_email_templates';
 
+/* A safe HTML body is a non-empty string that does NOT JSON-parse to an
+ * object or array. If a template editor accidentally serialised the
+ * full envelope ({ to, subject, html, text }) into the `body` slot, the
+ * stored string starts with `{` and would render as raw source in the
+ * recipient's inbox — exactly the "raw code in the email" bug. We
+ * defensively reject that here so the generator falls back to its
+ * hardcoded defaultBodyHtml. */
+export function isSafeHtmlBody(str) {
+  if (typeof str !== 'string') return false;
+  const trimmed = str.trim();
+  if (!trimmed) return false;
+  const first = trimmed[0];
+  if (first === '{' || first === '[') {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed !== null && typeof parsed === 'object') return false;
+    } catch {
+      /* not parseable — treat as HTML/text and allow through. */
+    }
+  }
+  return true;
+}
+
 function loadTemplateOverride(key) {
   try {
     const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem(EMAIL_TEMPLATE_KEY) : null;
@@ -147,7 +170,18 @@ function loadTemplateOverride(key) {
     const parsed = JSON.parse(raw);
     const t = parsed && parsed[key];
     if (!t) return null;
-    return { subject: t.subject || null, body: t.body || null };
+
+    /* Safety: if body is a JSON object/array string, discard it — it was
+     * saved incorrectly (probably the whole envelope object got stored
+     * instead of the inner HTML). The generator will fall back to its
+     * hardcoded default body. */
+    let body = t.body || null;
+    if (body && !isSafeHtmlBody(body)) {
+      try { console.warn(`[EmailTemplate] Override body for "${key}" is JSON, not HTML — ignoring override.`); } catch { /* ignore */ }
+      body = null;
+    }
+
+    return { subject: t.subject || null, body };
   } catch {
     return null;
   }
@@ -484,6 +518,170 @@ export function generateStaffInviteEmail(staff, tempPassword, org) {
   };
 }
 
+/* ────────────────────────────────────────────────────────────────────
+ *   6. Office created email — fired when an Admin/Director adds a new
+ *   office. Sent to the office's contact email so the on-site manager
+ *   gets a confirmation with the office's stamped details.
+ * ──────────────────────────────────────────────────────────────────── */
+
+export function generateOfficeCreatedEmail({ office, orgName, orgCountry }) {
+  const region    = pickRegion(orgCountry);
+  const to        = office?.contact?.emailId || '';
+  const orgLabel  = orgName || 'CorpGMS';
+  const manager   = office?.contact?.managerName || 'Team';
+  const addr      = office?.address || {};
+  const ops       = office?.operations || {};
+  const addrLine  = [addr.line1, addr.line2, addr.city, addr.state, addr.postalCode, addr.country]
+    .filter(Boolean).join(', ');
+  const days      = Array.isArray(ops.workingDays) ? ops.workingDays.join(', ') : '';
+
+  const subject = `Office "${office?.name || ''}" has been created on ${orgLabel}.`;
+
+  const bodyHtml = `
+    <p style="margin:0 0 12px 0;font-size:14px;line-height:1.7;color:#374151;">Hello ${escapeHtml(manager)},</p>
+    <p style="margin:0 0 14px 0;font-size:14px;line-height:1.7;color:#374151;">
+      A new office <strong style="color:#0C2340;">${escapeHtml(office?.name || '')}</strong>
+      (${escapeHtml(office?.code || '')}) has been added to <strong style="color:#0C2340;">${escapeHtml(orgLabel)}</strong> on CorpGMS.
+    </p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+           style="background:#F0F9FF;border-radius:10px;padding:14px 18px;margin:0 0 18px 0;">
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;width:140px;">Office Type</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(office?.type || '—')}</td></tr>
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;">Address</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(addrLine || '—')}</td></tr>
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;">Contact</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(office?.contact?.contactNumber || '—')}</td></tr>
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;">Hours</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(`${ops.openTime || '—'} – ${ops.closeTime || '—'}`)} ${ops.timezone ? `(${escapeHtml(ops.timezone)})` : ''}</td></tr>
+      ${days ? `<tr><td style="font-size:12px;color:#6B7280;padding:4px 0;">Working Days</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(days)}</td></tr>` : ''}
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;">Capacity</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(String(ops.maxCapacity || '—'))}</td></tr>
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;">Status</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(office?.status || 'Active')}</td></tr>
+    </table>
+    <p style="margin:0;font-size:13px;color:#374151;">
+      Log in to CorpGMS to manage this office, invite staff and start receiving visitors:
+      <a href="${escapeHtml(LOGIN_URL)}" style="color:#0284C7;text-decoration:none;font-weight:700;">${escapeHtml(LOGIN_URL)}</a>.
+    </p>
+    <p style="margin:14px 0 0 0;font-size:11px;color:#9CA3AF;">${escapeHtml(region.complianceLine)}</p>
+  `;
+
+  const text = [
+    `Hello ${manager},`,
+    '',
+    `A new office "${office?.name || ''}" (${office?.code || ''}) has been added to ${orgLabel} on CorpGMS.`,
+    '',
+    `Office Type   : ${office?.type || '-'}`,
+    `Address       : ${addrLine || '-'}`,
+    `Contact       : ${office?.contact?.contactNumber || '-'}`,
+    `Hours         : ${ops.openTime || '-'} - ${ops.closeTime || '-'}${ops.timezone ? ' (' + ops.timezone + ')' : ''}`,
+    days ? `Working Days  : ${days}` : null,
+    `Capacity      : ${ops.maxCapacity || '-'}`,
+    `Status        : ${office?.status || 'Active'}`,
+    '',
+    `Login: ${LOGIN_URL}`,
+    '',
+    `Need help? Email ${region.supportEmail} or WhatsApp ${region.whatsapp}.`,
+    '',
+    region.complianceLine,
+    '',
+    '— The CorpGMS Team',
+  ].filter(Boolean).join('\n');
+
+  return {
+    to,
+    subject,
+    html: htmlShell({
+      heading: `New office added: ${office?.name || ''}`,
+      bodyHtml,
+      region: region.region,
+      supportEmail: region.supportEmail,
+      whatsapp: region.whatsapp,
+    }),
+    text,
+  };
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ *   7. Password expiry warning — fired by the SuperAdmin Security
+ *   Policies tab when a user's password has not been changed within
+ *   the configured `passwordExpiryDays` window. The recipient is
+ *   asked to log in and rotate their credentials.
+ * ──────────────────────────────────────────────────────────────────── */
+
+export function generatePasswordExpiryEmail({ name, emailId, expiryDays, orgName, orgCountry, ageDays }) {
+  const region    = pickRegion(orgCountry);
+  const to        = emailId || '';
+  const recipient = name || 'there';
+  const days      = Number.isFinite(expiryDays) ? expiryDays : 90;
+  const aged      = Number.isFinite(ageDays) ? ageDays : days;
+  const orgLabel  = orgName || 'CorpGMS';
+
+  const subject   = `Action required: your CorpGMS password has expired (${days} days).`;
+
+  const bodyHtml = `
+    <p style="margin:0 0 12px 0;font-size:14px;line-height:1.7;color:#374151;">Hello ${escapeHtml(recipient)},</p>
+    <p style="margin:0 0 14px 0;font-size:14px;line-height:1.7;color:#374151;">
+      Your CorpGMS password for <strong style="color:#0C2340;">${escapeHtml(orgLabel)}</strong> has not been changed in
+      <strong style="color:#B45309;">${escapeHtml(String(aged))} day${aged === 1 ? '' : 's'}</strong>, which exceeds the
+      ${escapeHtml(String(days))}-day expiry policy set by your administrator. To keep your account secure,
+      please log in and update your password immediately.
+    </p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+           style="background:#FEF3C7;border:1px solid #FDE68A;border-radius:10px;padding:14px 18px;margin:0 0 18px 0;">
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;width:160px;">Account Email</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(to)}</td></tr>
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;">Password Age</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(String(aged))} day${aged === 1 ? '' : 's'}</td></tr>
+      <tr><td style="font-size:12px;color:#6B7280;padding:4px 0;">Policy Limit</td>
+          <td style="font-size:13px;color:#0C2340;font-weight:700;padding:4px 0;">${escapeHtml(String(days))} days</td></tr>
+    </table>
+    <p style="margin:0 0 14px 0;font-size:14px;line-height:1.7;color:#374151;">
+      <a href="${escapeHtml(LOGIN_URL)}"
+         style="display:inline-block;background:#0284C7;color:#FFFFFF;text-decoration:none;font-weight:700;
+                padding:10px 18px;border-radius:8px;font-size:13px;">
+        Log in &amp; reset password
+      </a>
+    </p>
+    <p style="margin:0;font-size:12px;color:#6B7280;">
+      If you did not expect this notice or believe it was sent in error, please contact your administrator.
+    </p>
+    <p style="margin:14px 0 0 0;font-size:11px;color:#9CA3AF;">${escapeHtml(region.complianceLine)}</p>
+  `;
+
+  const text = [
+    `Hello ${recipient},`,
+    '',
+    `Your CorpGMS password for ${orgLabel} has not been changed in ${aged} day${aged === 1 ? '' : 's'}, which exceeds the ${days}-day expiry policy.`,
+    '',
+    `Account Email : ${to}`,
+    `Password Age  : ${aged} day${aged === 1 ? '' : 's'}`,
+    `Policy Limit  : ${days} days`,
+    '',
+    `Log in and reset your password: ${LOGIN_URL}`,
+    '',
+    `Need help? Email ${region.supportEmail} or WhatsApp ${region.whatsapp}.`,
+    '',
+    region.complianceLine,
+    '',
+    '— The CorpGMS Team',
+  ].filter(Boolean).join('\n');
+
+  return {
+    to,
+    subject,
+    html: htmlShell({
+      heading: 'Password expiry — please update now',
+      bodyHtml,
+      region: region.region,
+      supportEmail: region.supportEmail,
+      whatsapp: region.whatsapp,
+    }),
+    text,
+  };
+}
+
 /**
  * previewEmail — convenience helper used by the UI to dispatch
  * transactional emails. It console.logs a preview AND POSTs the
@@ -612,8 +810,17 @@ export function generateWalkInArrivalEmail({ visitorName, visitorEmail, orgName,
   };
 }
 
+/**
+ * Returns a Promise<{ ok, status?, body?, error?, skipped? }> so callers
+ * that need to know whether the email actually went out (Resend Invite,
+ * Add Staff) can `await` it and show a real success/failure state. The
+ * old fire-and-forget callers still work — they simply ignore the
+ * returned promise. Failures are still also console-logged for devs.
+ */
 export function previewEmail(envelope) {
-  if (!envelope || typeof envelope !== 'object') return;
+  if (!envelope || typeof envelope !== 'object') {
+    return Promise.resolve({ ok: false, error: 'invalid-envelope' });
+  }
   /* eslint-disable no-console */
   console.groupCollapsed(
     `%c[CorpGMS Email]%c → ${envelope.to || '(no recipient)'} · ${envelope.subject || ''}`,
@@ -629,37 +836,61 @@ export function previewEmail(envelope) {
   console.groupEnd();
   /* eslint-enable no-console */
 
-  /* Bug 3+4 fix: actually dispatch the email through the backend.
-     We don't await — the calling flow finishes immediately and the
-     send happens in the background. */
-  if (envelope.to && envelope.subject) {
-    try {
-      fetch(`${EMAIL_DISPATCH_BASE}/notifications/dispatch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: envelope.to,
-          subject: envelope.subject,
-          html: envelope.html || '',
-          text: envelope.text || '',
-        }),
-      })
-        .then(async (res) => {
-          let body = {};
-          try { body = await res.json(); } catch { /* ignore */ }
-          if (!res.ok || body.success === false) {
-            console.warn('[CorpGMS Email] dispatch returned an error:', res.status, body);
-          } else if (body.skipped) {
-            console.warn('[CorpGMS Email] dispatch skipped (no SMTP recipient or transport).');
-          } else {
-            console.info('[CorpGMS Email] dispatched via backend.');
-          }
-        })
-        .catch((err) => {
-          console.warn('[CorpGMS Email] backend dispatch network error:', err && err.message ? err.message : err);
-        });
-    } catch (err) {
-      console.warn('[CorpGMS Email] dispatch threw synchronously:', err);
-    }
+  if (!envelope.to || !envelope.subject) {
+    return Promise.resolve({ ok: false, error: 'missing-to-or-subject' });
   }
+  if (!envelope.html || typeof envelope.html !== 'string' || !envelope.html.includes('<')) {
+    // eslint-disable-next-line no-console
+    console.error('[CorpGMS Email] html field is missing or not HTML — aborting dispatch', envelope);
+    return Promise.resolve({ ok: false, error: 'invalid-html' });
+  }
+
+  return fetch(`${EMAIL_DISPATCH_BASE}/notifications/dispatch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      to: envelope.to,
+      subject: envelope.subject,
+      html: envelope.html,
+      text: envelope.text || '',
+    }),
+  })
+    .then(async (res) => {
+      /* The backend returns JSON. If we receive non-JSON (e.g. the Vite
+       * dev server's index.html because the /api proxy isn't running,
+       * or an HTML 404 page), parsing fails and we MUST report it as an
+       * error — otherwise res.ok=true + missing body.success would slip
+       * past as a fake success. */
+      let body = null;
+      let parseErr = null;
+      try { body = await res.json(); } catch (e) { parseErr = e; }
+      if (parseErr || !body || typeof body !== 'object') {
+        // eslint-disable-next-line no-console
+        console.warn('[CorpGMS Email] dispatch returned non-JSON — proxy or endpoint may be misconfigured.', res.status);
+        return {
+          ok: false,
+          status: res.status,
+          error: `bad-response (HTTP ${res.status}, non-JSON) — check that the backend is running on :5000 and the Vite /api proxy is active.`,
+        };
+      }
+      if (!res.ok || body.success !== true) {
+        // eslint-disable-next-line no-console
+        console.warn('[CorpGMS Email] dispatch returned an error:', res.status, body);
+        return { ok: false, status: res.status, body, error: body?.message || `HTTP ${res.status}` };
+      }
+      if (body.skipped) {
+        // eslint-disable-next-line no-console
+        console.warn('[CorpGMS Email] dispatch skipped (no SMTP recipient or transport).');
+        return { ok: false, status: res.status, body, skipped: true, error: 'dispatch-skipped (SMTP not configured)' };
+      }
+      // eslint-disable-next-line no-console
+      console.info('[CorpGMS Email] dispatched via backend.');
+      return { ok: true, status: res.status, body };
+    })
+    .catch((err) => {
+      const msg = err && err.message ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn('[CorpGMS Email] backend dispatch network error:', msg);
+      return { ok: false, error: `network: ${msg}` };
+    });
 }

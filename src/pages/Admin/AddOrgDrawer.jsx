@@ -8,6 +8,18 @@ import {
   validatePhone, validateRequired, generateTempPassword,
   COUNTRY_TO_CURRENCY, COUNTRY_TO_CODE, DIAL_CODES,
 } from '../../utils/requestValidation';
+/* Phase 2 strict validators — layered on top of the legacy ones above
+ * so the new spec wins (2–100 org name with limited symbol set,
+ * lowercase + trim email, 10-digit Indian phone with fake-number block,
+ * 5–250 address bounds). Aliased to avoid name collisions. */
+import {
+  validateOrgName  as validateOrgNameStrict,
+  validateEmail    as validateEmailStrict,
+  validateName     as validatePersonNameStrict,
+  validatePhoneByCountry,
+  validateAddress  as validateAddressStrict,
+  sanitizeEmail,
+} from '../../utils/validators';
 import { generateWelcomeEmail, previewEmail } from '../../utils/emailTemplates';
 import { addAuditLog } from '../../utils/auditLogger';
 import { useCollection, STORAGE_KEYS } from '../../store';
@@ -216,18 +228,40 @@ export default function AddOrgDrawer({
 
   const validateAll = () => {
     const e = {};
-    const checks = [
-      ['orgName',       validateOrgName(form.orgName)],
-      ['country',       validateRequired(form.country, 'Country')],
-      ['ownerFullName', validateFullName(form.ownerFullName)],
-      ['ownerEmail',    validateBusinessEmail(form.ownerEmail)],
-      ['ownerContact',  validatePhone(form.ownerContact, form.ownerCountryCode)],
-      ['plan',          validateRequired(form.plan, 'Plan')],
+
+    /* Country / plan / account manager — keep the legacy required check
+     * because it understands country-code cascades + manager IDs. */
+    const required = [
+      ['country',        validateRequired(form.country, 'Country')],
+      ['plan',           validateRequired(form.plan, 'Plan')],
       ['accountManager', validateRequired(form.accountManager, 'Assigned Account Manager')],
     ];
-    for (const [field, res] of checks) {
+    for (const [field, res] of required) {
       if (!res.valid) e[field] = res.reason;
     }
+
+    /* Phase 2 strict rules win for the user-typed identity fields. */
+    const orgErr = validateOrgNameStrict(form.orgName, { label: 'Organisation name', min: 2, max: 100 });
+    if (orgErr) e.orgName = orgErr;
+
+    const nameErr = validatePersonNameStrict(form.ownerFullName, { label: 'Full name', min: 2, max: 50 });
+    if (nameErr) e.ownerFullName = nameErr;
+
+    const emailErr = validateEmailStrict(form.ownerEmail, { label: 'Email ID' });
+    if (emailErr) e.ownerEmail = emailErr;
+
+    /* Country-aware: Indian numbers go through the strict 10-digit
+     * 6-9-prefix + fake-block rule; international tenants get the legacy
+     * 7–15-digit fallback. */
+    const phoneErr = validatePhoneByCountry(form.ownerContact, form.country, { label: 'Contact number' });
+    if (phoneErr) e.ownerContact = phoneErr;
+
+    /* Address — optional, but enforce 5–250 length when provided. */
+    if (form.address && form.address.trim()) {
+      const addrErr = validateAddressStrict(form.address, { required: false, min: 5, max: 250 });
+      if (addrErr) e.address = addrErr;
+    }
+
     if (form.plan === 'Custom') {
       const override = Number(form.priceOverride);
       if (!Number.isFinite(override) || override < 0) {
@@ -452,14 +486,14 @@ export default function AddOrgDrawer({
                 />
               </Field>
             </div>
-            <Field label="Address">
+            <Field label="Address" error={errors.address} hint="If provided, must be 5–250 characters.">
               <input
                 type="text"
                 value={form.address}
                 onChange={(e) => set('address', e.target.value)}
                 placeholder="Enter street address"
-                maxLength={200}
-                className={inputCls()}
+                maxLength={250}
+                className={inputCls(errors.address)}
               />
             </Field>
             <div className={twoColCls()}>
@@ -502,7 +536,7 @@ export default function AddOrgDrawer({
                 <input
                   type="email"
                   value={form.ownerEmail}
-                  onChange={(e) => set('ownerEmail', e.target.value)}
+                  onChange={(e) => set('ownerEmail', sanitizeEmail(e.target.value))}
                   placeholder="Enter owner business email ID"
                   className={inputCls(errors.ownerEmail)}
                 />

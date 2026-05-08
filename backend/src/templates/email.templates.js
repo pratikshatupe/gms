@@ -489,4 +489,95 @@ module.exports = {
     ),
     text: `Service request ${p.title} - ${p.status || p.change || 'updated'}`,
   }),
+
+  /**
+   * ANNOUNCEMENT — branded HTML for platform-wide announcements sent
+   * by Super Admin. The same body text is also persisted on the
+   * Notification record for in-app display.
+   */
+  ANNOUNCEMENT: (p) => {
+    const accent = p.type === 'urgent'  ? '#dc2626'
+                 : p.type === 'warning' ? '#b45309'
+                 : '#0284c7';
+    const heading = p.type === 'urgent'  ? 'Important announcement'
+                  : p.type === 'warning' ? 'Announcement'
+                  : 'New announcement';
+    const safeBody = String(p.body || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n{2,}/g, '</p><p style="margin:0 0 16px;">')
+      .replace(/\n/g, '<br/>');
+    return {
+      subject: p.title || heading,
+      html: wrap(
+        heading,
+        `<p style="margin:0 0 12px;">Hello ${p.recipientName || ''},</p>
+         <p style="margin:0 0 20px;">
+           You have a new announcement from
+           <strong style="color:${accent};">${p.sender || 'CorpGMS'}</strong>:
+         </p>
+         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                style="margin:8px 0 20px;border-left:4px solid ${accent};
+                       background:#f8fafc;border-radius:6px;">
+           <tr><td style="padding:14px 18px;">
+             <p style="margin:0 0 8px;font-size:16px;font-weight:700;color:#0f172a;">
+               ${p.title || ''}
+             </p>
+             <p style="margin:0 0 16px;font-size:14px;color:#1e293b;line-height:1.6;">
+               ${safeBody}
+             </p>
+           </td></tr>
+         </table>
+         ${p.loginUrl ? ctaButton(p.loginUrl, 'Open CorpGMS', accent) : ''}
+         <p style="margin:20px 0 0;font-size:13px;color:#64748b;">
+           This message was sent to you by ${p.sender || 'an administrator'}.
+         </p>`
+      ),
+      text: `${p.title || 'Announcement'}\n\n${p.body || ''}\n\n— ${p.sender || 'CorpGMS'}`,
+    };
+  },
+
+  /**
+   * WELCOME — sent the moment a new account / organisation / director
+   * is provisioned. Includes the org name, login email, role, and a
+   * temporary password if one was generated.
+   */
+  WELCOME: (p) => ({
+    subject: `Welcome to ${p.orgName || p.platformName || 'CorpGMS'}`,
+    html: wrap(
+      `Welcome to ${p.platformName || 'CorpGMS'}`,
+      `<p style="margin:0 0 20px;">Hello ${p.name || ''},</p>
+       <p style="margin:0 0 20px;">
+         Your account on <strong>${p.platformName || 'CorpGMS'}</strong>
+         has been created successfully.
+         ${p.orgName ? `You are joining <strong>${p.orgName}</strong>.` : ''}
+       </p>
+       ${p.orgName     ? infoRow('Organisation',   `<strong>${p.orgName}</strong>`) : ''}
+       ${                infoRow('Login Email',    `<strong>${p.email}</strong>`) }
+       ${p.role        ? infoRow('Role',           `<strong>${p.role}</strong>`) : ''}
+       ${p.tempPassword
+          ? infoRow('Temporary Password',
+              `<code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">${p.tempPassword}</code>`)
+          : ''}
+       ${p.loginUrl ? ctaButton(p.loginUrl, 'Sign In to CorpGMS', '#0284c7') : ''}
+       <p style="margin:20px 0 0;font-size:13px;color:#64748b;">
+         ${p.tempPassword
+            ? 'Please change your password after your first sign-in.'
+            : 'You can sign in using the credentials you set during registration.'}
+       </p>
+       <p style="margin:20px 0 0;font-size:13px;color:#64748b;">
+         Thank you,<br/>The CorpGMS Team
+       </p>`
+    ),
+    text:
+      `Hello ${p.name || ''},\n\n` +
+      `Your account has been created successfully.\n\n` +
+      (p.orgName     ? `Organisation: ${p.orgName}\n` : '') +
+      `Login Email: ${p.email}\n` +
+      (p.role        ? `Role: ${p.role}\n` : '') +
+      (p.tempPassword? `Temporary Password: ${p.tempPassword}\n` : '') +
+      (p.loginUrl    ? `\nSign in: ${p.loginUrl}\n` : '') +
+      `\nThank you,\nCorpGMS Team`,
+  }),
 };

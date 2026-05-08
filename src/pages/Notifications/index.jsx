@@ -10,6 +10,7 @@ import { useCollection, STORAGE_KEYS } from '../../store';
 import { SUPER_ADMIN_NOTIFICATIONS } from '../../data/mockData';
 import { Toast, ConfirmModal } from '../../components/ui';
 import { addAuditLog } from '../../utils/auditLogger';
+import { createAnnouncement as apiCreateAnnouncement } from '../../api/announcementsApi';
 
 const SEVERITY_META = {
   success:  { label: 'Success',  borderL: 'border-l-green-500',  iconBg: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300',  pill: 'border-green-200 bg-green-50 text-green-700 dark:border-green-500/30 dark:bg-green-900/20 dark:text-green-300' },
@@ -125,8 +126,9 @@ function SeverityPill({ severity }) {
   );
 }
 
-function NotificationRow({ entry, onMarkRead, onClick }) {
+function NotificationRow({ entry, onMarkRead, onClick, onDismissAnnouncement, onDeleteGlobal, isSuperAdmin }) {
   const meta = SEVERITY_META[entry.severity] || SEVERITY_META.info;
+  const isAnnouncement = entry.kind === 'announcement';
   return (
     <div
       onClick={() => onClick(entry)}
@@ -142,6 +144,11 @@ function NotificationRow({ entry, onMarkRead, onClick }) {
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <span className="text-[14px] font-extrabold text-[#0C2340] dark:text-gray-100">{entry.title}</span>
           <SeverityPill severity={entry.severity} />
+          {isAnnouncement && (
+            <span className="rounded-full border border-sky-500 bg-sky-50 px-2 py-[1px] text-[9px] font-bold uppercase tracking-wider text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-300">
+              Announcement
+            </span>
+          )}
           {!entry.isRead && (
             <span className="rounded-full bg-red-600 px-[7px] py-[2px] text-[9px] font-extrabold uppercase text-white">
               New
@@ -159,7 +166,7 @@ function NotificationRow({ entry, onMarkRead, onClick }) {
           </span>
         </div>
       </div>
-      <div className="flex shrink-0 gap-2">
+      <div className="flex shrink-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:gap-2">
         {!entry.isRead && (
           <button
             type="button"
@@ -168,6 +175,26 @@ function NotificationRow({ entry, onMarkRead, onClick }) {
             className="cursor-pointer rounded-[10px] border border-green-600 bg-white px-3 py-[5px] text-[11px] font-bold text-green-600 transition hover:bg-green-50 dark:bg-gray-900 dark:hover:bg-green-900/20"
           >
             Mark Read
+          </button>
+        )}
+        {isAnnouncement && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDismissAnnouncement?.(entry); }}
+            title="Hide this announcement only for me"
+            className="cursor-pointer rounded-[10px] border border-amber-600 bg-white px-3 py-[5px] text-[11px] font-bold text-amber-700 transition hover:bg-amber-50 dark:bg-gray-900 dark:text-amber-400 dark:hover:bg-amber-900/20"
+          >
+            Dismiss
+          </button>
+        )}
+        {isAnnouncement && isSuperAdmin && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDeleteGlobal?.(entry); }}
+            title="Delete this announcement for ALL users"
+            className="cursor-pointer rounded-[10px] border border-red-600 bg-white px-3 py-[5px] text-[11px] font-bold text-red-600 transition hover:bg-red-50 dark:bg-gray-900 dark:hover:bg-red-900/20"
+          >
+            Delete (All)
           </button>
         )}
       </div>
@@ -185,7 +212,10 @@ function OrgNotifications({ setActivePage }) {
     markAllAsRead,
     clearRead,
     clearAll,
+    dismissAnnouncementEntry,
+    deleteAnnouncementEntryGlobal,
   } = useNotifications();
+  const isSuperAdmin = (user?.role || '').toLowerCase() === 'superadmin';
 
   const currentStaffId = useMemo(() => {
     if (!user) return null;
@@ -274,7 +304,7 @@ function OrgNotifications({ setActivePage }) {
     });
   };
 
-  const doConfirm = () => {
+  const doConfirm = async () => {
     if (!confirm) return;
     if (confirm.kind === 'read') {
       clearRead();
@@ -285,8 +315,40 @@ function OrgNotifications({ setActivePage }) {
       clearAll();
       setToast({ msg: 'All notifications cleared.', type: 'success' });
       logAudit('NOTIFICATIONS_CLEARED_ALL', `Cleared all ${total} notifications.`);
+    } else if (confirm.kind === 'delete-global') {
+      try {
+        await deleteAnnouncementEntryGlobal(confirm.entry);
+        setToast({ msg: 'Announcement deleted for all users.', type: 'success' });
+        logAudit(
+          'ANNOUNCEMENT_DELETED_GLOBAL',
+          `Deleted announcement "${confirm.entry?.title || ''}" for all users.`,
+        );
+      } catch (err) {
+        setToast({
+          msg: `Failed to delete announcement: ${err?.message || 'unknown error'}.`,
+          type: 'error',
+        });
+      }
     }
     setConfirm(null);
+  };
+
+  const handleDismissAnnouncement = async (entry) => {
+    try {
+      await dismissAnnouncementEntry(entry);
+      setToast({ msg: 'Announcement dismissed.', type: 'success' });
+    } catch {
+      setToast({ msg: 'Could not dismiss on the server — hidden locally.', type: 'success' });
+    }
+  };
+
+  const handleDeleteGlobal = (entry) => {
+    setConfirm({
+      kind: 'delete-global',
+      entry,
+      title: 'Delete this announcement for ALL users?',
+      message: `Are you sure you want to delete "${entry?.title || 'this announcement'}" for all users? This will remove it from every recipient's notification feed and cannot be undone.`,
+    });
   };
 
   const handleRowClick = (entry) => {
@@ -442,6 +504,9 @@ function OrgNotifications({ setActivePage }) {
                     entry={n}
                     onMarkRead={markAsRead}
                     onClick={handleRowClick}
+                    onDismissAnnouncement={handleDismissAnnouncement}
+                    onDeleteGlobal={handleDeleteGlobal}
+                    isSuperAdmin={isSuperAdmin}
                   />
                 ))}
               </div>
@@ -557,13 +622,32 @@ function NotificationDetailModal({ notif, onClose }) {
   );
 }
 
-function AnnouncementModal({ open, onClose, onSend }) {
+/* Recipient option values map cleanly to the backend Announcement model:
+ *   'all'              → recipients.type = 'all_organisations'
+ *   'role:DIRECTOR'    → recipients.type = 'role',  roles = ['DIRECTOR']
+ *   'role:MANAGER'     → recipients.type = 'role',  roles = ['MANAGER']
+ *   'role:RECEPTION'   → recipients.type = 'role',  roles = ['RECEPTION']
+ *   'role:SERVICE_STAFF' → recipients.type = 'role', roles = ['SERVICE_STAFF']
+ */
+function buildRecipientsPayload(value) {
+  if (typeof value !== 'string') return { type: 'all_organisations' };
+  if (value === 'all') return { type: 'all_organisations' };
+  if (value.startsWith('role:')) {
+    return { type: 'role', roles: [value.slice(5)] };
+  }
+  return { type: 'all_organisations' };
+}
+
+function AnnouncementModal({ open, onClose, onSend, sending }) {
   const [title, setTitle]           = useState('');
   const [message, setMessage]       = useState('');
   const [recipients, setRecipients] = useState('all');
+  /* SMS is always false in Phase 1 — backend persists the flag for
+   * audit but never delivers. We keep the checkbox visible & disabled
+   * with a tooltip so the user understands why. */
   const [channels, setChannels]     = useState({ inApp: true, email: false, sms: false });
-  const [schedule, setSchedule]     = useState('now');
-  const [scheduleAt, setScheduleAt] = useState('');
+  /* Schedule for later is disabled in Phase 1; only "send now" is
+   * accepted by the backend. */
   const [confirm, setConfirm]       = useState(false);
   const [errors, setErrors]         = useState({});
 
@@ -575,11 +659,8 @@ function AnnouncementModal({ open, onClose, onSend }) {
     else if (title.length > 80)     e.title = 'Title must be 80 characters or fewer.';
     if (!message.trim())            e.message = 'Message is required.';
     else if (message.length > 500)  e.message = 'Message must be 500 characters or fewer.';
-    if (!channels.inApp && !channels.email && !channels.sms) {
-      e.channels = 'Please select at least one channel.';
-    }
-    if (schedule === 'later' && !scheduleAt) {
-      e.scheduleAt = 'Please choose a send date and time.';
+    if (!channels.inApp && !channels.email) {
+      e.channels = 'Please select at least one channel (In-app or Email).';
     }
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -595,22 +676,21 @@ function AnnouncementModal({ open, onClose, onSend }) {
       title: title.trim(),
       message: message.trim(),
       recipients,
-      channels,
-      schedule: schedule === 'now' ? null : scheduleAt,
+      channels: { ...channels, sms: false }, /* never deliver SMS in Phase 1 */
     });
     setConfirm(false);
-    onClose();
+    /* Modal close is delegated to the caller after the API call resolves. */
   };
 
   const recipientOptions = [
-    { value: 'all',          label: 'All Organisations' },
-    { value: 'tier-starter', label: 'Starter Plan Only' },
-    { value: 'tier-pro',     label: 'Professional Plan Only' },
-    { value: 'tier-ent',     label: 'Enterprise Plan Only' },
-    { value: 'specific',     label: 'Specific Organisations' },
+    { value: 'all',                 label: 'All Organisations' },
+    { value: 'role:DIRECTOR',       label: 'All Admins (Directors)' },
+    { value: 'role:MANAGER',        label: 'All Managers' },
+    { value: 'role:RECEPTION',      label: 'All Reception staff' },
+    { value: 'role:SERVICE_STAFF',  label: 'All Service staff' },
   ];
 
-  const channelCount = Number(channels.inApp) + Number(channels.email) + Number(channels.sms);
+  const channelCount = Number(channels.inApp) + Number(channels.email);
 
   const inputCls = 'w-full rounded-[10px] border border-slate-200 bg-white px-3 py-2.5 text-[13px] text-slate-700 outline-none placeholder:text-slate-400 focus:border-sky-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:placeholder:text-gray-500';
   const errCls   = 'border-red-500 dark:border-red-500/60';
@@ -620,8 +700,8 @@ function AnnouncementModal({ open, onClose, onSend }) {
       {confirm && (
         <ConfirmModal
           title="Send Announcement"
-          message={`This will send "${title}" to all matching organisations via ${channelCount} channel${channelCount === 1 ? '' : 's'}. Continue?`}
-          confirmLabel="Continue"
+          message={`This will send "${title}" to ${recipients === 'all' ? 'every active user across all organisations' : 'all users matching the selected role'} via ${channelCount} channel${channelCount === 1 ? '' : 's'}. Continue?`}
+          confirmLabel="Send"
           destructive={false}
           onConfirm={handleConfirm}
           onCancel={() => setConfirm(false)}
@@ -635,7 +715,7 @@ function AnnouncementModal({ open, onClose, onSend }) {
         <div className="max-h-[88vh] w-full max-w-[640px] overflow-y-auto rounded-[14px] bg-white p-6 font-[Outfit,'Plus_Jakarta_Sans',sans-serif] shadow-2xl dark:bg-gray-900">
           <div className="mb-4">
             <h3 className="m-0 text-[18px] font-extrabold text-[#0C2340] dark:text-gray-100">📢 Send Announcement</h3>
-            <p className="mt-1 text-[13px] text-slate-500 dark:text-gray-400">Broadcast a message to your tenants. Send immediately or schedule.</p>
+            <p className="mt-1 text-[13px] text-slate-500 dark:text-gray-400">Broadcast a message to your users. Sent immediately to all selected recipients.</p>
           </div>
 
           <label className="mb-1.5 block text-[12px] font-bold text-slate-700 dark:text-gray-300">
@@ -657,7 +737,7 @@ function AnnouncementModal({ open, onClose, onSend }) {
           <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value.slice(0, 500))}
-            placeholder="Enter the announcement body shown to tenants."
+            placeholder="Enter the announcement body shown to recipients."
             rows={4}
             className={`${inputCls} max-h-[180px] resize-y ${errors.message ? errCls : ''}`}
             maxLength={500}
@@ -680,42 +760,41 @@ function AnnouncementModal({ open, onClose, onSend }) {
             Channels<span className="text-red-600">*</span>
           </label>
           <div className="mb-1 text-[11px] text-slate-500 dark:text-gray-400 space-y-0.5">
-            {channels.inApp  && <p>📢 In-app banner will appear in each organisation's Notifications feed.</p>}
-            {channels.email  && <p>✉️  Email will be sent to all owners & users of matching organisations.</p>}
-            {channels.sms    && <p>📱 SMS text will be sent to all users with a registered phone number.</p>}
+            {channels.inApp  && <p>📢 In-app banner will appear in each recipient's Notifications feed.</p>}
+            {channels.email  && <p>✉️  Email will be sent to all selected users using the configured SMTP server.</p>}
           </div>
           <div className="mb-2 flex flex-wrap gap-2.5">
-            {[
-              ['inApp', 'In-app banner'],
-              ['email', 'Email'],
-              ['sms',   'SMS'],
-            ].map(([key, label]) => (
-              <label key={key} className="inline-flex cursor-pointer items-center gap-2 rounded-[10px] border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
-                <input type="checkbox" checked={channels[key]} onChange={(e) => setChannels((c) => ({ ...c, [key]: e.target.checked }))} />
-                {label}
-              </label>
-            ))}
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-[10px] border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+              <input type="checkbox" checked={channels.inApp} onChange={(e) => setChannels((c) => ({ ...c, inApp: e.target.checked }))} />
+              In-app banner
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-[10px] border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+              <input type="checkbox" checked={channels.email} onChange={(e) => setChannels((c) => ({ ...c, email: e.target.checked }))} />
+              Email
+            </label>
+            <label
+              title="SMS integration pending"
+              className="inline-flex cursor-not-allowed items-center gap-2 rounded-[10px] border border-slate-200 bg-slate-100 px-3 py-2 text-[13px] text-slate-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500"
+            >
+              <input type="checkbox" checked={false} disabled readOnly />
+              SMS <span className="text-[10px] uppercase tracking-wider">(integration pending)</span>
+            </label>
           </div>
           {errors.channels && <p className="mb-3 text-[11px] text-red-600">{errors.channels}</p>}
 
           <label className="mb-1.5 mt-2 block text-[12px] font-bold text-slate-700 dark:text-gray-300">Schedule</label>
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <label className="inline-flex items-center gap-1.5 text-[13px] text-slate-700 dark:text-gray-200">
-              <input type="radio" name="schedule" checked={schedule === 'now'} onChange={() => setSchedule('now')} /> Send now
+              <input type="radio" name="schedule" checked readOnly /> Send now
             </label>
-            <label className="inline-flex items-center gap-1.5 text-[13px] text-slate-700 dark:text-gray-200">
-              <input type="radio" name="schedule" checked={schedule === 'later'} onChange={() => setSchedule('later')} /> Schedule for later
+            <label
+              title="Scheduled announcements pending"
+              className="inline-flex cursor-not-allowed items-center gap-1.5 text-[13px] text-slate-400 dark:text-gray-500"
+            >
+              <input type="radio" name="schedule" disabled readOnly />
+              Schedule for later <span className="text-[10px] uppercase tracking-wider">(coming soon)</span>
             </label>
-            {schedule === 'later' && (
-              <input
-                type="datetime-local"
-                value={scheduleAt}
-                onChange={(e) => setScheduleAt(e.target.value)}
-                className={`rounded-[10px] border bg-white px-2.5 py-2 text-[13px] text-slate-700 dark:bg-gray-800 dark:text-gray-200 ${errors.scheduleAt ? 'border-red-500' : 'border-slate-200 dark:border-gray-700'}`}
-              />
-            )}
           </div>
-          {errors.scheduleAt && <p className="mb-2.5 text-[11px] text-red-600">{errors.scheduleAt}</p>}
 
           <div className="mb-4 rounded-[10px] border border-dashed border-slate-200 bg-sky-50/50 p-3 dark:border-gray-700 dark:bg-gray-800">
             <p className="m-0 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">In-app preview</p>
@@ -727,16 +806,18 @@ function AnnouncementModal({ open, onClose, onSend }) {
             <button
               type="button"
               onClick={onClose}
-              className="cursor-pointer rounded-[10px] border border-slate-300 bg-white px-4 py-2 text-[13px] font-bold text-slate-600 transition hover:bg-slate-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+              disabled={sending}
+              className="cursor-pointer rounded-[10px] border border-slate-300 bg-white px-4 py-2 text-[13px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={handleSend}
-              className="cursor-pointer rounded-[10px] border border-sky-600 bg-sky-500 px-4 py-2 text-[13px] font-bold text-white transition hover:bg-sky-700"
+              disabled={sending}
+              className="cursor-pointer rounded-[10px] border border-sky-600 bg-sky-500 px-4 py-2 text-[13px] font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Send
+              {sending ? 'Sending…' : 'Send'}
             </button>
           </div>
         </div>
@@ -755,9 +836,42 @@ function SuperAdminNotifications() {
   const [toast, setToast] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [showAnnouncement, setShowAnnouncement] = useState(false);
+  const [sendingAnnouncement, setSendingAnnouncement] = useState(false);
   const [viewNotif, setViewNotif] = useState(null);
   const [, , , , replaceAnnouncements] = useCollection(STORAGE_KEYS.ANNOUNCEMENTS, []);
   const { user } = useAuth();
+  const {
+    notifications: feedNotifications,
+    refreshAnnouncements,
+    deleteAnnouncementEntryGlobal,
+  } = useNotifications();
+  const announcementEntries = useMemo(
+    () => (feedNotifications || []).filter((n) => n.kind === 'announcement'),
+    [feedNotifications],
+  );
+  const [annDeleteConfirm, setAnnDeleteConfirm] = useState(null);
+
+  const requestAnnouncementDelete = (entry) => setAnnDeleteConfirm(entry);
+  const doAnnouncementDelete = async () => {
+    if (!annDeleteConfirm) return;
+    try {
+      await deleteAnnouncementEntryGlobal(annDeleteConfirm);
+      setToast({ msg: 'Announcement deleted for all users.', type: 'success' });
+      addAuditLog({
+        userName: user?.name || 'Super Admin',
+        role: 'superadmin',
+        action: 'ANNOUNCEMENT_DELETED_GLOBAL',
+        module: 'Notifications',
+        description: `Deleted announcement "${annDeleteConfirm.title || ''}" for all users.`,
+      });
+    } catch (err) {
+      setToast({
+        msg: `Failed to delete announcement: ${err?.message || 'unknown error'}.`,
+        type: 'error',
+      });
+    }
+    setAnnDeleteConfirm(null);
+  };
 
   const stats = useMemo(() => ({
     billing:  notifs.filter((n) => n.category === 'Billing' && n.status === 'Unread').length,
@@ -819,81 +933,90 @@ function SuperAdminNotifications() {
 
  
   const handleSendAnnouncement = async (payload) => {
-    const record = {
-      id: `ann-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      sentBy: user?.name || 'Super Admin',
-      ...payload,
+    /* Build the backend Announcement payload from the modal's form
+     * shape. Only one channel form is allowed in Phase 1 (in-app +
+     * optional email); SMS is force-disabled. Schedule is always
+     * "send now". */
+    const recipients = buildRecipientsPayload(payload.recipients);
+    const apiPayload = {
+      title: payload.title,
+      body:  payload.message,
+      type:  'info',
+      recipients,
+      channels: {
+        inApp: Boolean(payload.channels?.inApp),
+        email: Boolean(payload.channels?.email),
+        sms:   false,
+      },
+      schedule: { sendNow: true, scheduledAt: null },
     };
 
+    setSendingAnnouncement(true);
+    let summary = null;
+    let createdId = null;
     try {
+      const result = await apiCreateAnnouncement(apiPayload);
+      summary = result?.summary || null;
+      createdId = result?.announcement?._id || result?.announcement?.id || null;
+    } catch (err) {
+      setSendingAnnouncement(false);
+      setToast({
+        msg: `Failed to send announcement: ${err?.message || 'unknown error'}.`,
+        type: 'error',
+      });
+      return;
+    }
+
+    /* Local audit-log mirror of the announcement so the SuperAdmin
+     * dashboard's Announcements list (localStorage) stays in sync.
+     * Non-fatal on storage errors. */
+    try {
+      const record = {
+        id: createdId || `ann-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        sentBy: user?.name || 'Super Admin',
+        title: payload.title,
+        message: payload.message,
+        recipients: payload.recipients,
+        channels: payload.channels,
+      };
       const existing = JSON.parse(localStorage.getItem(STORAGE_KEYS.ANNOUNCEMENTS) || '[]');
       const next = [record, ...(Array.isArray(existing) ? existing : [])];
       replaceAnnouncements(next);
-    } catch {
-      replaceAnnouncements([record]);
-    }
+    } catch { /* non-fatal */ }
 
-    if (payload.channels.inApp) {
-      try {
-        const existingNotifs = JSON.parse(localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS) || '[]');
-        const annNotif = {
-          id: `ann-notif-${Date.now()}`,
-          type: 'system_alert',
-          severity: 'info',
-          title: payload.title,
-          message: payload.message,
-          icon: '📢',
-          timestamp: new Date().toISOString(),
-          isRead: false,
-          actorName: 'Super Admin',
-          // No orgId filter — visible to all orgs (NotificationContext handles org isolation)
-          announcementId: record.id,
-          recipientFilter: payload.recipients, // 'all' | 'tier-starter' | etc.
-        };
-        const updatedNotifs = [annNotif, ...(Array.isArray(existingNotifs) ? existingNotifs : [])];
-        localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(updatedNotifs));
-      } catch (err) {
-        console.error('Failed to inject in-app announcement notification:', err);
-      }
-    }
-
-    if (payload.channels.email || payload.channels.sms) {
-      try {
-        await fetch('/api/announcements', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            title: payload.title,
-            message: payload.message,
-            recipients: payload.recipients,
-            channels: {
-              email: payload.channels.email,
-              sms: payload.channels.sms,
-            },
-            scheduleAt: payload.schedule,
-          }),
-        });
-      } catch (err) {
-        console.error('Announcement backend dispatch failed:', err);
-      }
-    }
+    /* Pull the freshly-created announcement back via the standard
+     * /announcements/my poll so it appears in the local feed straight
+     * away rather than waiting for the next 60s tick. */
+    try { await refreshAnnouncements?.(); } catch { /* non-fatal */ }
 
     const recipientLabel = payload.recipients === 'all'
       ? 'all organisations'
-      : payload.recipients.startsWith('tier-')
-        ? `the ${payload.recipients.replace('tier-', '')} tier`
-        : 'selected organisations';
+      : payload.recipients.startsWith('role:')
+        ? `${payload.recipients.replace('role:', '').replace('_', ' ')} role`
+        : 'selected recipients';
+    const totalRecipients = summary?.totalRecipients ?? 0;
+    const emailsSent      = summary?.emailsSent      ?? 0;
+    const channelsList    = Object.entries(payload.channels || {})
+      .filter(([k, v]) => v && k !== 'sms').map(([k]) => k).join(', ') || 'in-app';
+    const detail = payload.channels?.email
+      ? ` · ${emailsSent}/${totalRecipients} emails sent`
+      : '';
 
-    setToast({ msg: `Announcement sent to ${recipientLabel} successfully.`, type: 'success' });
+    setToast({
+      msg: `Announcement sent to ${totalRecipients} user${totalRecipients === 1 ? '' : 's'} (${recipientLabel})${detail}.`,
+      type: 'success',
+    });
     addAuditLog({
       userName:    user?.name || 'Super Admin',
       role:        'superadmin',
       action:      'ANNOUNCEMENT_SENT',
       module:      'Notifications',
-      description: `Sent announcement "${payload.title}" to ${recipientLabel} on ${Object.entries(payload.channels).filter(([, v]) => v).map(([k]) => k).join(', ')}.`,
+      description: `Sent announcement "${payload.title}" to ${recipientLabel} on ${channelsList}.${detail}`,
     });
+
+    setSendingAnnouncement(false);
+    setShowAnnouncement(false);
   };
 
   const handlers = {
@@ -932,6 +1055,17 @@ function SuperAdminNotifications() {
         />
       )}
 
+      {annDeleteConfirm && (
+        <ConfirmModal
+          title="Delete this announcement for ALL users?"
+          message={`Are you sure you want to delete "${annDeleteConfirm.title || 'this announcement'}" for all users? This will remove it from every recipient's notification feed and cannot be undone.`}
+          confirmLabel="Delete"
+          destructive={true}
+          onConfirm={doAnnouncementDelete}
+          onCancel={() => setAnnDeleteConfirm(null)}
+        />
+      )}
+
       <SectionHeader
         title="Platform Notifications"
         subtitle="Tenants, billing, security, and support events across every organisation."
@@ -961,6 +1095,43 @@ function SuperAdminNotifications() {
           </button>
         ))}
       </div>
+
+      {announcementEntries.length > 0 && (
+        <section className="mb-6 rounded-[14px] border border-slate-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-900">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="m-0 text-[14px] font-extrabold text-[#0C2340] dark:text-gray-100">📢 Recent announcements</h2>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
+              {announcementEntries.length} active
+            </span>
+          </div>
+          <div className="flex flex-col gap-2.5">
+            {announcementEntries.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex flex-wrap items-start gap-3 rounded-[10px] border border-slate-200 bg-slate-50 p-3 dark:border-gray-700 dark:bg-gray-800"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="text-[13px] font-extrabold text-[#0C2340] dark:text-gray-100">{entry.title}</span>
+                    <span className="text-[10px] text-slate-500 dark:text-gray-400">
+                      {formatTimeAgo(entry.timestamp)}
+                    </span>
+                  </div>
+                  <p className="m-0 text-[12px] leading-relaxed text-slate-700 dark:text-gray-300">{entry.message}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => requestAnnouncementDelete(entry)}
+                  title="Delete this announcement for ALL users"
+                  className="shrink-0 cursor-pointer rounded-[10px] border border-red-600 bg-white px-3 py-1.5 text-[11px] font-bold text-red-600 transition hover:bg-red-50 dark:bg-gray-900 dark:hover:bg-red-900/20"
+                >
+                  Delete (All)
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="mb-4 flex flex-wrap gap-2">
         {SA_TABS.map((label) => {
@@ -1048,7 +1219,12 @@ function SuperAdminNotifications() {
         })}
       </div>
 
-      <AnnouncementModal open={showAnnouncement} onClose={() => setShowAnnouncement(false)} onSend={handleSendAnnouncement} />
+      <AnnouncementModal
+        open={showAnnouncement}
+        onClose={() => setShowAnnouncement(false)}
+        onSend={handleSendAnnouncement}
+        sending={sendingAnnouncement}
+      />
     </div>
   );
 }

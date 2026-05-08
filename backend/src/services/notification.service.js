@@ -10,6 +10,21 @@ const whatsappTemplates = require('../templates/whatsapp.templates');
 
 let mailTransporter = null;
 
+/**
+ * Bug 3 fix — explicit transporter reset. The transporter is cached
+ * after first use so subsequent calls reuse the same SMTP connection
+ * pool. If env vars change at runtime (e.g. server boot reloads the
+ * .env after validation, or admin updates settings), the cached
+ * transporter still uses the stale credentials. Call this at server
+ * boot AFTER env validation, and any time SMTP config is mutated.
+ */
+function resetTransporter() {
+  if (mailTransporter && typeof mailTransporter.close === 'function') {
+    try { mailTransporter.close(); } catch { /* ignore */ }
+  }
+  mailTransporter = null;
+}
+
 /* When SMTP isn't configured, fall back to nodemailer's JSON
    streamTransport so the email envelope is captured (and logged)
    instead of being dropped silently. This makes the "did the email
@@ -27,15 +42,24 @@ function getMailTransporter() {
     mailTransporter._isFallback = true;
     return mailTransporter;
   }
+  /* Bug 1 fix — Gmail-specific TLS config. Gmail's SMTP server is
+   * picky about STARTTLS; without `requireTLS: true` the connection
+   * occasionally negotiates a plaintext fallback and Gmail then
+   * silently re-renders the message as the text/plain alternative
+   * (which is what causes the "raw HTML in inbox" symptom). Forcing
+   * TLS + cert verification keeps the channel encrypted and makes
+   * Gmail honour the multipart/alternative ordering we sent. */
+  const isGmail = String(env.smtp.host || '').toLowerCase().includes('gmail');
   mailTransporter = nodemailer.createTransport({
     host: env.smtp.host,
     port: env.smtp.port,
     secure: env.smtp.secure,
     auth: { user: env.smtp.user, pass: env.smtp.password },
+    ...(isGmail ? { requireTLS: true, tls: { rejectUnauthorized: true } } : {}),
   });
   /* Fire a verify in the background so a bad SMTP config is loud. */
   mailTransporter.verify().then(
-    () => logger.info('[email] SMTP transport verified.'),
+    () => logger.info(`[email] SMTP transport verified.${isGmail ? ' (Gmail TLS hardening enabled.)' : ''}`),
     (err) => logger.error('[email] SMTP verify failed: ' + (err && err.message ? err.message : err)),
   );
   return mailTransporter;
@@ -71,30 +95,78 @@ async function sendEmail({ to, subject, html, text }) {
     logger.warn('[email] sendEmail called without a string "subject" — skipping.');
     return { skipped: true, reason: 'no-subject' };
   }
-  if (!html || typeof html !== 'string') {
-    logger.warn(`[email] sendEmail called without an html body to=${to} — skipping. typeof html=${typeof html}`);
-    return { skipped: true, reason: 'no-html' };
+  /* CRITICAL: html must be a real HTML string. If it's missing, not a
+   * string, or has no `<` (e.g. xss-clean stripped every tag on the way
+   * in), abort rather than ship a broken/empty email — the recipient
+   * would otherwise see the plain-text alternative or nothing at all,
+   * and Gmail's "show original" reveals the corruption. */
+  if (!html || typeof html !== 'string' || !html.includes('<')) {
+    logger.warn(`[email] sendEmail: html is missing or not valid HTML for to=${to}. Received: ${String(html).slice(0, 100)}`);
+    return { skipped: true, reason: 'invalid-html' };
   }
 
   /* Build a sane plain-text fallback. We deliberately do NOT use the
    * HTML as the text part — that's exactly what causes Gmail to
    * display "<!doctype html>…" as the body. If the caller supplied a
    * proper text alternative use it; otherwise generate one from the
-   * HTML by stripping tags / collapsing whitespace. */
-  const plainText = (typeof text === 'string' && text.trim())
+   * HTML by stripping tags / collapsing whitespace.
+   *
+   * Defensive guard: if the caller's `text` happens to BE the HTML
+   * string (same value, or starts with a doctype / <html> tag), we
+   * discard it and strip the HTML ourselves. plainText must NEVER be
+   * the raw HTML source. */
+  function looksLikeHtml(s) {
+    if (typeof s !== 'string') return false;
+    const head = s.trim().slice(0, 200).toLowerCase();
+    return head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('<body');
+  }
+  const callerTextIsUsable =
+    typeof text === 'string' &&
+    text.trim() &&
+    text !== html &&
+    !looksLikeHtml(text);
+  let plainText = callerTextIsUsable
     ? text
     : htmlToPlainText(html)
       || 'Please view this email in an HTML-compatible email client.';
 
+  /* Bug 4 fix — final safety guard. If plainText still contains a `<`
+   * after the previous checks, something pushed raw HTML through
+   * (e.g. a custom caller, a template that bypassed wrap(), or a
+   * future regression). Strip again, and if the result is empty fall
+   * back to a stock plain-text message. plainText must NEVER contain
+   * HTML markup — Gmail will otherwise display the source. */
+  if (typeof plainText !== 'string' || plainText.includes('<')) {
+    const stripped = htmlToPlainText(plainText || '');
+    plainText = stripped && !stripped.includes('<')
+      ? stripped
+      : 'Please view this email in an HTML-compatible email client.';
+  }
+
   try {
     const fromName = env.smtp.fromName || process.env.EMAIL_FROM_NAME || 'CorpGMS';
     const fromAddr = env.smtp.fromAddress || process.env.EMAIL_FROM_ADDRESS || 'no-reply@corpgms.ae';
+    /* Audit log line requested in the email-sweep brief. Confirms html
+     * is a real string and shows the first 50 chars so a regression
+     * (e.g. plain text accidentally sent as html) is obvious in logs. */
+    logger.debug('[email] typeof html=' + typeof html + ' first50=' + (html || '').substring(0, 50));
+    /* Use the explicit `alternatives` array instead of nodemailer's
+     * { html, text } shorthand. The shorthand emits text/plain before
+     * text/html in the multipart/alternative MIME body, and certain
+     * Gmail rendering paths (preview, mobile inline render, "show
+     * original" → reflow) end up showing the FIRST readable part —
+     * which is the plain text. By controlling order explicitly and
+     * placing text/html LAST, we guarantee the HTML is the preferred
+     * alternative per RFC 2046 §5.1.4 and Gmail renders the branded
+     * template. */
     const info = await transporter.sendMail({
       from: `"${fromName}" <${fromAddr}>`,
       to,
       subject,
-      html,
-      text: plainText,
+      alternatives: [
+        { contentType: 'text/plain; charset=utf-8', content: plainText },
+        { contentType: 'text/html; charset=utf-8',  content: html },
+      ],
     });
     if (transporter._isFallback) {
       logger.info(`[email-fallback] would-send to=${to} subject="${subject}" htmlLen=${html.length} (no SMTP configured)`);
@@ -188,7 +260,11 @@ async function dispatch({
     let body = '';
     if (channel === NOTIFICATION_CHANNEL.EMAIL && content.email) {
       subject = content.email.subject;
-      body = content.email.html;
+      /* Persist the plain-text body, never the rendered HTML. The DB
+       * `body` column is shown in admin UIs / digests where embedded
+       * <!doctype html> would render as raw source. The HTML envelope
+       * is passed to nodemailer separately below. */
+      body = content.email.text;
     } else if (channel === NOTIFICATION_CHANNEL.WHATSAPP && content.whatsapp) {
       body = content.whatsapp;
     } else {
@@ -220,7 +296,7 @@ async function dispatch({
         await sendEmail({
           to: recipient.email,
           subject,
-          html: body,
+          html: content.email && content.email.html,
           text: content.email && content.email.text,
         });
         notification.status = NOTIFICATION_STATUS.SENT;
@@ -274,4 +350,4 @@ async function markAllRead(organizationId, userId) {
   );
 }
 
-module.exports = { dispatch, listNotifications, markRead, markAllRead, sendEmail, sendWhatsApp };
+module.exports = { dispatch, listNotifications, markRead, markAllRead, sendEmail, sendWhatsApp, resetTransporter };

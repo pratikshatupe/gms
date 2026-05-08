@@ -47,7 +47,24 @@
       "Bash(echo \"exit: $?\")",
       "Bash(npx --yes esbuild src/pages/Landing/RegistrationModal.jsx --loader=jsx --bundle=false)",
       "Bash(npx --yes esbuild --loader=jsx --bundle=false)",
-      "Bash(npx --yes esbuild --loader=jsx)"
+      "Bash(npx --yes esbuild --loader=jsx)",
+      "Bash(rm -f /tmp/cgms-backend.log)",
+      "Bash(node src/server.js)",
+      "Bash(node __smtp_test.js)",
+      "Bash(node -e ' *)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "Bash(node --check src/utils/emailTemplates.js)",
+      "Bash(curl -s http://127.0.0.1:5000/api/v1/health)",
+      "Bash(curl *)",
+      "Bash(netstat -ano -p TCP)",
+      "Bash(npm run *)",
+      "Bash(tasklist)",
+      "Bash(taskkill /PID 8116 /F)",
+      "Bash(node --check src/services/notification.service.js)",
+      "Bash(node --check src/services/user.service.js)",
+      "Bash(node --check src/server.js)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\src\" -Recurse -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)"
     ]
   }
 }

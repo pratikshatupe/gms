@@ -4,8 +4,20 @@ import {
 } from 'lucide-react';
 import { Field, SearchableSelect, Toast } from '../../components/ui';
 import { useCollection, STORAGE_KEYS } from '../../store';
-import { MOCK_OFFICES } from '../../data/mockData';
+import { MOCK_OFFICES, MOCK_ORGANIZATIONS } from '../../data/mockData';
 import { addAuditLog } from '../../utils/auditLogger';
+import { generateOfficeCreatedEmail, previewEmail } from '../../utils/emailTemplates';
+/* Phase 2 strict validators. The existing country-aware phone rule
+ * (e.g. "+91 followed by 10 digits") is kept for non-India entries;
+ * India is rerouted through the strict Indian validator (10 digits,
+ * starts with 6/7/8/9, blocks repeated/sequential fakes). */
+import {
+  validateEmail   as validateEmailStrict,
+  validateName    as validatePersonNameStrict,
+  validatePhoneIndian,
+  validateAddress as validateAddressStrict,
+  sanitizeEmail   as sanitizeEmailStrict,
+} from '../../utils/validators';
 
 export const OFFICE_TYPES = ['HQ', 'Branch', 'Warehouse', 'Regional Office', 'Other'];
 export const WORKING_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -126,7 +138,8 @@ function sanitizePhone(value) {
 }
 
 function sanitizeEmail(value) {
-  return String(value || '').trim().toLowerCase().slice(0, 100);
+  /* Phase 2 spec: lowercase + trim + strip internal whitespace. */
+  return sanitizeEmailStrict(value).slice(0, 100);
 }
 
 function sanitizeManagerName(value) {
@@ -197,19 +210,18 @@ export function validateOfficeForm(form, allOffices, orgId, opts = {}) {
     e.type = 'Office Type is required.';
   }
 
-  if (isBlank(address1)) {
-    e['address.line1'] = 'Address Line 1 is required.';
-  } else if (address1.length < 5) {
-    e['address.line1'] = 'Address Line 1 must be at least 5 characters.';
-  } else if (address1.length > 200) {
-    e['address.line1'] = 'Address Line 1 must be 200 characters or fewer.';
+  /* Phase 2 spec: address must be 5–250 characters. */
+  const addrErr = validateAddressStrict(address1, { label: 'Address Line 1', min: 5, max: 250, required: true });
+  if (addrErr) {
+    e['address.line1'] = addrErr;
   } else if (!ADDRESS_RE.test(address1)) {
     e['address.line1'] = 'Address Line 1 contains unsupported characters.';
   }
 
   if (address2) {
-    if (address2.length > 200) {
-      e['address.line2'] = 'Address Line 2 must be 200 characters or fewer.';
+    const addr2Err = validateAddressStrict(address2, { label: 'Address Line 2', min: 1, max: 250, required: false });
+    if (addr2Err) {
+      e['address.line2'] = addr2Err;
     } else if (!ADDRESS_RE.test(address2)) {
       e['address.line2'] = 'Address Line 2 contains unsupported characters.';
     }
@@ -251,8 +263,16 @@ export function validateOfficeForm(form, allOffices, orgId, opts = {}) {
     e['contact.contactNumber'] = 'Contact Number accepts digits, spaces and hyphens only.';
   } else {
     const digitsOnly = contact.replace(/[^0-9]/g, '');
-    if (country === 'India' && !(digitsOnly.startsWith('91') && digitsOnly.length === 12)) {
-      e['contact.contactNumber'] = 'Contact Number must be +91 followed by 10 digits for India.';
+    /* India: enforce the strict Phase 2 rule on the local 10-digit
+     * portion — exactly 10 digits, starts with 6/7/8/9, blocks known
+     * fakes (0000…, 1234567890, etc.). Accept either "+91 9876543210"
+     * (12 digits with 91 prefix) or a bare "9876543210" (10 digits). */
+    if (country === 'India') {
+      const local = digitsOnly.startsWith('91') && digitsOnly.length === 12
+        ? digitsOnly.slice(2)
+        : digitsOnly;
+      const indiaErr = validatePhoneIndian(local, { label: 'Contact Number' });
+      if (indiaErr) e['contact.contactNumber'] = indiaErr;
     } else if (
       country === 'United Arab Emirates' &&
       !(digitsOnly.startsWith('971') && digitsOnly.length === 12)
@@ -263,21 +283,16 @@ export function validateOfficeForm(form, allOffices, orgId, opts = {}) {
     }
   }
 
-  // Bug 9 fix: email is now required for offices
-  if (isBlank(email)) {
-    e['contact.emailId'] = 'Email ID is required.';
-  } else if (email.length > 100) {
-    e['contact.emailId'] = 'Email ID must be 100 characters or fewer.';
-  } else if (!EMAIL_RE.test(email)) {
-    e['contact.emailId'] = 'Please enter a valid Email ID.';
-  }
+  /* Phase 2 spec: required, valid format, no spaces, lowercased on
+   * input, length cap. */
+  const emailErr = validateEmailStrict(email, { label: 'Email ID' });
+  if (emailErr) e['contact.emailId'] = emailErr;
 
   if (manager) {
-    if (manager.length < 2 || manager.length > 50) {
-      e['contact.managerName'] = 'Manager Name must be 2 to 50 characters.';
-    } else if (!MANAGER_RE.test(manager)) {
-      e['contact.managerName'] = "Manager Name accepts letters, spaces and .' - only.";
-    }
+    /* Phase 2 spec: 2–50 letters, must start with a letter, allow
+     * spaces, dots, hyphens, apostrophes. */
+    const mgrErr = validatePersonNameStrict(manager, { label: 'Manager Name', min: 2, max: 50, required: false });
+    if (mgrErr) e['contact.managerName'] = mgrErr;
   }
 
   if (isBlank(form.operations?.openTime)) {
@@ -607,6 +622,27 @@ export default function AddOfficeDrawer({ open, onClose, onCreated, currentUser 
       description: `Created office ${record.name} (${record.code}).`,
       orgId,
     });
+
+    /* Fire the branded "office created" email to the office's contact
+     * inbox so the manager gets a record of the new location and the
+     * stamped operating hours. Fire-and-forget — UI continues even when
+     * SMTP is offline. */
+    if (record.contact?.emailId) {
+      try {
+        const org = (MOCK_ORGANIZATIONS || []).find(
+          (o) => o?.id === orgId || o?.organisationId === orgId,
+        );
+        const envelope = generateOfficeCreatedEmail({
+          office: record,
+          orgName: org?.name,
+          orgCountry: org?.country || record.address?.country,
+        });
+        previewEmail({ ...envelope, to: record.contact.emailId });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[AddOfficeDrawer] office-created email dispatch failed:', err);
+      }
+    }
 
     setSaving(false);
     onCreated?.(record);

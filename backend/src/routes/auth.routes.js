@@ -15,4 +15,9 @@ router.post('/logout', authenticate, ctrl.logout);
 router.post('/change-password', authenticate, validate(v.changePassword), ctrl.changePassword);
 router.get('/me', authenticate, ctrl.profile);
 
+/* Forgot-password OTP flow — public, rate-limited like login. */
+router.post('/forgot-password', authLimiter, validate(v.forgotPassword), ctrl.forgotPassword);
+router.post('/verify-otp',      authLimiter, validate(v.verifyOtp),      ctrl.verifyOtp);
+router.post('/reset-password',  authLimiter, validate(v.resetPassword),  ctrl.resetPassword);
+
 module.exports = router;

@@ -21,8 +21,8 @@ export function LandingNav({ isDark, scrollY, onEnterApp, onSignUp }) {
     ? (scrollY > 40 ? '0 2px 24px rgba(0,0,0,0.5)' : 'none')
     : (scrollY > 40 ? '0 2px 24px rgba(108,92,231,0.08)' : 'none');
   const navLinkColor = isDark ? '#7EB8D6' : MID;
-  const navLogoTitle = isDark ? '#e9e4ff' : DARK;
-  const navLogoSub   = isDark ? 'rgba(162,155,254,0.5)' : MUTED;
+  const navLogoTitle = isDark ? '#f1f5f9' : DARK;
+  const navLogoSub   = isDark ? '#cbd5e1' : '#64748b';
 
   return (
     <nav style={{

@@ -57,10 +57,16 @@ async function sendWelcomeEmailSafe({ to, name, orgName, role, tempPassword }) {
  */
 async function resolveCouponSnapshot({ couponCode, plan, organizationSize }) {
   if (!couponCode) return { couponCode: null, appliedDiscount: null };
+  /* skipValidation: the user already passed the live isValid check at
+   * /coupons/apply time. Re-running it here was producing false
+   * "Coupon is expired" errors when the same registration session
+   * had pushed usedCount up to its cap. Plan / org-size gating is
+   * still enforced inside applyCoupon. */
   const result = await couponService.applyCoupon({
     couponCode,
     selectedPlan: plan,
     organizationSize,
+    skipValidation: true,
   });
   return {
     couponCode: result.coupon.code,

@@ -82,13 +82,23 @@ async function validateCoupon(code, { plan, orderAmount }) {
  * creation (`recordCouponUsage`). The plan price comes from the server
  * catalogue, never from the client.
  */
-async function applyCoupon({ couponCode, organizationSize, selectedPlan }) {
+async function applyCoupon({ couponCode, organizationSize, selectedPlan, skipValidation = false }) {
   const code = normaliseCode(couponCode);
   if (!code) throw ApiError.badRequest('Coupon code is required');
 
   const coupon = await Coupon.findOne({ code });
   if (!coupon) throw ApiError.notFound('Invalid Coupon Code');
-  if (!coupon.isValid) throw ApiError.badRequest('Coupon is expired or no longer valid');
+  /* `skipValidation` is set when the org-creation flow re-resolves a
+   * coupon snapshot it already validated at /apply time. Re-running the
+   * isValid check there spuriously rejected coupons whose `usedCount`
+   * had since hit `maxUses`, even though the redemption was for the
+   * very same applicant. Plan / org-size gating is still enforced. */
+  if (!skipValidation && !coupon.isValid) {
+    throw ApiError.badRequest('Coupon is expired or no longer valid');
+  }
+  if (skipValidation && !coupon.isActive) {
+    throw ApiError.badRequest('Coupon is no longer active');
+  }
 
   const allowedPlans = coupon.effectiveAllowedPlans;
   if (allowedPlans.length > 0 && selectedPlan && !allowedPlans.includes(selectedPlan)) {

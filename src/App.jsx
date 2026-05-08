@@ -250,7 +250,7 @@ function AppShell() {
   }, [user, logout, navigate]);
 
   return (
-    <div className="flex min-h-screen w-full bg-[#F0F9FF]">
+    <div className="flex min-h-screen w-full bg-[#F0F9FF] dark:bg-slate-950">
       {isMobile && mobileOpen && (
         <div onClick={() => setMobileOpen(false)} className="fixed inset-0 z-[99] bg-black/50" />
       )}

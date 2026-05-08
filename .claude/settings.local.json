@@ -64,7 +64,21 @@
       "Bash(node --check src/services/user.service.js)",
       "Bash(node --check src/server.js)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Dell\\\\Downloads\\\\corporate-guest-management-system \\(1\\)\\\\corporate-guest-management-system\\\\src\" -Recurse -Directory)",
-      "Bash(Select-Object -ExpandProperty FullName)"
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(node --check \"c:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/src/pages/settings/EmailTemplates.jsx\")",
+      "Bash(./node_modules/.bin/esbuild --loader=jsx --bundle=false --log-level=error src/pages/settings/EmailTemplates.jsx)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(node --check backend/src/controllers/auth.controller.js)",
+      "Bash(node --check backend/src/routes/auth.routes.js)",
+      "Bash(node --check backend/src/validators/auth.validator.js)",
+      "Bash(node --check backend/src/services/coupon.service.js)",
+      "Bash(node --check backend/src/services/organization.service.js)",
+      "Bash(node --check src/services/auth.service.js)",
+      "Bash(node --check src/controllers/auth.controller.js)",
+      "Bash(node --check src/config/env.js)",
+      "Bash(node --check __smtp_test.js)",
+      "Bash(node -e \"const fs = require\\('fs'\\); const code = fs.readFileSync\\('C:/Users/Dell/Downloads/corporate-guest-management-system \\(1\\)/corporate-guest-management-system/src/pages/Login.jsx', 'utf8'\\); try { require\\('@babel/parser'\\).parse\\(code, { sourceType: 'module', plugins: ['jsx'] }\\); console.log\\('Login.jsx: parse OK'\\); } catch \\(e\\) { console.error\\('Parse error:', e.message\\); process.exit\\(1\\); }\")",
+      "Bash(node *)"
     ]
   }
 }

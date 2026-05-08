@@ -580,4 +580,44 @@ module.exports = {
       (p.loginUrl    ? `\nSign in: ${p.loginUrl}\n` : '') +
       `\nThank you,\nCorpGMS Team`,
   }),
+
+  /**
+   * PASSWORD_RESET_OTP — sent when a user starts the forgot-password
+   * flow. Carries a 6-digit code that expires in 10 minutes. The OTP
+   * itself is rendered in a large mono block so it is easy to copy.
+   */
+  PASSWORD_RESET_OTP: (p) => ({
+    subject: `Your ${p.platformName || 'CorpGMS'} password reset code`,
+    html: wrap(
+      'Reset your password',
+      `<p style="margin:0 0 18px;">Hello ${p.name || ''},</p>
+       <p style="margin:0 0 18px;">
+         We received a request to reset the password for your
+         <strong>${p.platformName || 'CorpGMS'}</strong> account
+         (<strong>${p.email}</strong>).
+       </p>
+       <p style="margin:0 0 12px;">Use the verification code below to continue:</p>
+       <div style="margin:18px 0 22px;text-align:center;">
+         <div style="display:inline-block;padding:14px 28px;border-radius:10px;
+                     background:#f1f5f9;border:1px solid #e2e8f0;
+                     font-family:'Courier New',monospace;font-size:30px;
+                     font-weight:800;letter-spacing:8px;color:#0f172a;">
+           ${p.otp || ''}
+         </div>
+       </div>
+       <p style="margin:0 0 18px;font-size:13px;color:#64748b;">
+         This code expires in <strong>${p.expiresInMinutes || 10} minutes</strong>.
+         If you did not request a password reset, you can safely ignore this email.
+       </p>
+       <p style="margin:20px 0 0;font-size:13px;color:#64748b;">
+         Thank you,<br/>The CorpGMS Team
+       </p>`
+    ),
+    text:
+      `Hello ${p.name || ''},\n\n` +
+      `Use this verification code to reset your CorpGMS password: ${p.otp}\n` +
+      `This code expires in ${p.expiresInMinutes || 10} minutes.\n\n` +
+      `If you did not request a password reset, you can ignore this email.\n\n` +
+      `Thank you,\nCorpGMS Team`,
+  }),
 };

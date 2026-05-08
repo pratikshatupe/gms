@@ -63,6 +63,11 @@ const userSchema = new mongoose.Schema(
     lockedUntil:              { type: Date },
     twoFASecret:              { type: String, select: false },
     twoFAEnabled:             { type: Boolean, default: false },
+
+    /* Forgot-password OTP. Stored hashed (sha256 hex) so a DB leak does
+     * not expose live OTPs. resetOtpExpiry is an absolute timestamp. */
+    resetOtp:        { type: String, select: false },
+    resetOtpExpiry:  { type: Date,   select: false },
   },
   { timestamps: true }
 );

@@ -49,4 +49,25 @@ const register = {
   }),
 };
 
-module.exports = { login, refresh, changePassword, register };
+const forgotPassword = {
+  body: Joi.object({
+    email: Joi.string().email().required(),
+  }),
+};
+
+const verifyOtp = {
+  body: Joi.object({
+    email: Joi.string().email().required(),
+    otp: Joi.string().length(6).pattern(/^\d{6}$/).required(),
+  }),
+};
+
+const resetPassword = {
+  body: Joi.object({
+    email: Joi.string().email().required(),
+    otp: Joi.string().length(6).pattern(/^\d{6}$/).required(),
+    newPassword: Joi.string().min(8).max(128).required(),
+  }),
+};
+
+module.exports = { login, refresh, changePassword, register, forgotPassword, verifyOtp, resetPassword };

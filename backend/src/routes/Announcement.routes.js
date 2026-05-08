@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { authenticate } = require('../middlewares/auth.middleware');
-const ctrl = require('../controllers/announcement.controller');
+const ctrl = require('../controllers/Announcement.controller');
 
 const router = express.Router();
 

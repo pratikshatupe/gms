@@ -5,6 +5,14 @@ const ApiResponse = require('../utils/ApiResponse');
 const announcementService = require('../services/announcement.service');
 const platformNoticeService = require('../services/platformNotice.service');
 const { ROLES } = require('../config/constants');
+const { normaliseRole } = require('../middlewares/role.middleware');
+
+/* Compare normalised forms so the demo Super Admin bypass (which carries
+ * `role: 'superadmin'`) is treated identically to a real DB user whose
+ * role enum value is `'SUPER_ADMIN'`. Without this, the strict `===` check
+ * blocked the demo SA from sending announcements. */
+const SUPER_ADMIN_KEY = normaliseRole(ROLES.SUPER_ADMIN);
+const isSuperAdmin = (req) => normaliseRole(req.user?.role) === SUPER_ADMIN_KEY;
 
 /**
  * POST /api/v1/announcements
@@ -38,7 +46,7 @@ const listMine = asyncHandler(async (req, res) => {
  * Super Admin only. Full announcement log + delivery summaries.
  */
 const listAll = asyncHandler(async (req, res) => {
-  if (req.user?.role !== ROLES.SUPER_ADMIN) {
+  if (!isSuperAdmin(req)) {
     return res.status(403).json({ success: false, message: 'Forbidden: SuperAdmin only.' });
   }
   const data = await announcementService.listAllForSuperAdmin(req.query);
@@ -75,7 +83,7 @@ const remove = asyncHandler(async (req, res) => {
  * implementation so existing flows keep working.
  */
 const sendMaintenanceNotice = asyncHandler(async (req, res) => {
-  if (req.user?.role !== ROLES.SUPER_ADMIN) {
+  if (!isSuperAdmin(req)) {
     return res.status(403).json({ success: false, message: 'Forbidden: SuperAdmin only.' });
   }
   const { message, startAt, endAt, audience = 'all' } = req.body || {};

@@ -5,6 +5,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { verifyAccessToken } = require('../utils/token');
 const User = require('../models/User');
+const { ROLES } = require('../config/constants');
 
 /* Sentinel ObjectId for the demo Super Admin. Using a real 24-char hex
  * string keeps Mongoose happy when controllers cast the value into
@@ -32,12 +33,12 @@ const authenticate = asyncHandler(async (req, _res, next) => {
   if (token === 'super-admin-demo-token') {
     req.user = {
       _id: SUPER_ADMIN_OBJECT_ID,
-      role: 'superadmin',
+      role: ROLES.SUPER_ADMIN,
       isActive: true,
     };
     req.auth = {
       userId: SUPER_ADMIN_OBJECT_ID,
-      role: 'superadmin',
+      role: ROLES.SUPER_ADMIN,
     };
     return next();
   }
@@ -51,12 +52,12 @@ const authenticate = asyncHandler(async (req, _res, next) => {
   if (decoded && decoded.sub === 'superadmin') {
     req.user = {
       _id: SUPER_ADMIN_OBJECT_ID,
-      role: 'superadmin',
+      role: ROLES.SUPER_ADMIN,
       isActive: true,
     };
     req.auth = {
       userId: SUPER_ADMIN_OBJECT_ID,
-      role: 'superadmin',
+      role: ROLES.SUPER_ADMIN,
     };
     return next();
   }

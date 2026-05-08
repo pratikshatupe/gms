@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "lint": "eslint src/**/*.js"
+    "lint": "eslint src/**/*.js",
+    "smtp:test": "node __smtp_test.js"
   },
   "engines": {
     "node": ">=18.0.0"

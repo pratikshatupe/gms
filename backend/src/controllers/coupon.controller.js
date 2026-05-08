@@ -139,7 +139,17 @@ const apply = asyncHandler(async (req, res) => {
 const redeem = asyncHandler(async (req, res) => {
   const { couponCode, organizationSize, selectedPlan } = req.body || {};
   try {
-    const validation = await couponService.applyCoupon({ couponCode, organizationSize, selectedPlan });
+    /* The coupon was already validated when /coupons/apply was called;
+     * we only need the validation envelope here for the response shape.
+     * skipValidation avoids the double-rejection where usedCount has
+     * since hit maxUses for this very registration. The cap is still
+     * enforced by recordCouponUsage's atomic conditional update below. */
+    const validation = await couponService.applyCoupon({
+      couponCode,
+      organizationSize,
+      selectedPlan,
+      skipValidation: true,
+    });
     const updated = await couponService.recordCouponUsage(couponCode);
     if (!updated) {
       return res.status(200).json({

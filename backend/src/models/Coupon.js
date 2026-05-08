@@ -57,9 +57,14 @@ couponSchema.virtual('effectiveMaxUses').get(function () {
 
 couponSchema.virtual('isValid').get(function () {
   if (!this.isActive) return false;
-  const now = new Date();
-  if (this.validFrom && now < this.validFrom) return false;
-  if (this.validUntil && now > this.validUntil) return false;
+  /* Compare epoch ms explicitly so a `validUntil` saved without a
+   * timezone marker is interpreted consistently regardless of the
+   * server's local TZ. Previously a `new Date()` vs `Date` object
+   * comparison could fire up to ~5.5h early when the server ran in UTC
+   * but the coupon was authored in IST. */
+  const nowMs = Date.now();
+  if (this.validFrom && nowMs < new Date(this.validFrom).getTime()) return false;
+  if (this.validUntil && nowMs > new Date(this.validUntil).getTime()) return false;
   const cap = this.effectiveMaxUses;
   if (cap !== null && cap !== undefined && this.usedCount >= cap) return false;
   return true;

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Mail, Eye, RotateCcw, Save, GripVertical, Plus, X } from 'lucide-react';
+import { Mail, Eye, RotateCcw, Save, GripVertical, Plus, X, FilePlus } from 'lucide-react';
 import { Toast } from '../../components/ui';
 import { apiJson } from '../../api/http';
 import {
@@ -9,6 +9,8 @@ import {
   generateWelcomeEmail,
   generateWalkInArrivalEmail,
 } from '../../utils/emailTemplates';
+import { useAuth } from '../../context/AuthContext';
+import { useBranding } from '../../context/BrandingContext';
 
 const UNSUBSCRIBE_HTML = `<p style="font-size:11px;color:#94A3B8;text-align:center;margin-top:16px;">
   Don't want these emails?
@@ -46,7 +48,88 @@ function blocksToBody(blocks) {
     .join('\n');
 }
 
-const STORAGE_KEY = EMAIL_TEMPLATE_KEY;
+const STORAGE_KEY        = EMAIL_TEMPLATE_KEY;
+const CUSTOM_STORAGE_KEY = 'cgms_custom_email_templates';
+
+/* Tokens that are auto-supported on every custom template — wired up to
+ * the live AuthContext / BrandingContext / current-org snapshot in the
+ * preview so the author sees real values rather than placeholder text. */
+const CUSTOM_DEFAULT_TOKENS = ['{{organizationName}}', '{{recipientName}}', '{{platformName}}', '{{ownerEmail}}', '{{website}}'];
+
+function slugifyKey(name) {
+  const base = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-')
+    .slice(0, 40);
+  return base ? `custom_${base}` : `custom_${Date.now().toString(36)}`;
+}
+
+function escapeHtmlSimple(value) {
+  if (value == null) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function fillCustomTokens(text, vars) {
+  return String(text || '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, name) => {
+    if (vars && Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null && vars[name] !== '') {
+      return String(vars[name]);
+    }
+    /* Leave the placeholder visible in the preview so the author can see
+     * which token is unfilled, instead of an empty gap. */
+    return `{{${name}}}`;
+  });
+}
+
+/* Render a custom template's preview. Uses the same visual chrome the
+ * built-in shell uses so the author sees a representative envelope.
+ * `ctxVars` carries the live AuthContext / BrandingContext / org values
+ * so {{organizationName}}, {{recipientName}}, etc. are filled with real
+ * data when available — placeholders are kept for any unknown token. */
+function renderCustomPreview({ subject, body, ctxVars }) {
+  const subjectFilled = fillCustomTokens(subject || '', ctxVars);
+  const bodyFilled    = fillCustomTokens(body    || '', ctxVars);
+  const platform = escapeHtmlSimple(ctxVars.platformName || 'CorpGMS');
+  const orgLine  = escapeHtmlSimple(ctxVars.organizationName || ctxVars.tagline || '');
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>${escapeHtmlSimple(subjectFilled)}</title></head>
+<body style="margin:0;padding:0;background:#E0F2FE;font-family:'Plus Jakarta Sans',Arial,sans-serif;color:#0C2340;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#E0F2FE;padding:24px 0;">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#FFFFFF;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(14,165,233,0.10);">
+        <tr><td style="background:linear-gradient(135deg,#0EA5E9,#0D9488);padding:24px 28px;color:#FFFFFF;">
+          <div style="font-family:Outfit,sans-serif;font-weight:800;font-size:18px;letter-spacing:-0.3px;">${platform}</div>
+          ${orgLine ? `<div style="font-size:12px;opacity:0.85;margin-top:2px;">${orgLine}</div>` : ''}
+        </td></tr>
+        <tr><td style="padding:28px;">${bodyFilled}</td></tr>
+        <tr><td style="background:#F0F9FF;padding:18px 28px;border-top:1px solid #BAE6FD;font-size:12px;color:#6B7280;">
+          <div style="color:#9CA3AF;">© ${platform} — All rights reserved.</div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+  return { subject: subjectFilled, html, text: bodyFilled.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() };
+}
+
+function loadCustomList() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_STORAGE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((c) => c && c.key && c.label) : [];
+  } catch { return []; }
+}
+
+function saveCustomList(arr) {
+  try { localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(arr || [])); } catch { /* ignore */ }
+}
 
 /* ────────────────────────────────────────────────────────────────────
  *  Catalogue of editable email types. Each entry knows:
@@ -217,17 +300,13 @@ const TEMPLATES = [
   },
 ];
 
-const TEMPLATES_BY_KEY = TEMPLATES.reduce((acc, t) => {
-  acc[t.key] = t;
-  return acc;
-}, {});
-
-function readTemplates() {
+function readTemplates(templates) {
+  const list = Array.isArray(templates) ? templates : TEMPLATES;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     const out = {};
-    for (const t of TEMPLATES) {
+    for (const t of list) {
       const stored  = parsed?.[t.key] || {};
       /* Defensive: subject and body must be plain strings. If a malformed
        * payload stored an object/array (e.g. the whole envelope), fall
@@ -251,7 +330,7 @@ function readTemplates() {
     return out;
   } catch {
     const out = {};
-    for (const t of TEMPLATES) {
+    for (const t of list) {
       out[t.key] = {
         ...t.defaults,
         blocks: bodyToBlocks(t.defaults.body),
@@ -263,12 +342,110 @@ function readTemplates() {
 }
 
 export default function EmailTemplates() {
+  const { user } = useAuth();
+  const branding = useBranding();
+
+  /* Custom templates the user has authored. Stored separately from the
+   * built-in TEMPLATES catalogue (cgms_custom_email_templates) because the
+   * shape carries metadata (label, description, tokens) we don't want
+   * mixed with the per-tenant subject/body overrides. The actual
+   * subject/body still flows through the same draft/persisted pipeline
+   * keyed by `t.key`, so backend sync and dirty-tracking are unchanged. */
+  const [customTemplates, setCustomTemplates] = useState(() => loadCustomList());
+
+  /* Effective list = built-ins + custom. Each custom entry is normalised
+   * to the same shape as built-ins (key/label/description/tokens/defaults),
+   * with `isCustom: true` so the preview renderer can branch. */
+  const allTemplates = useMemo(() => {
+    const customMeta = customTemplates.map((c) => ({
+      key:         c.key,
+      label:       c.label,
+      description: c.description || 'Custom template',
+      tokens:      Array.isArray(c.tokens) && c.tokens.length ? c.tokens : CUSTOM_DEFAULT_TOKENS,
+      defaults:    {
+        subject: c.defaultSubject || `${c.label} — {{organizationName}}`,
+        body:    c.defaultBody    || '<p>Your custom content here. You can use {{recipientName}}, {{organizationName}}, {{platformName}}.</p>',
+      },
+      isCustom: true,
+    }));
+    return [...TEMPLATES, ...customMeta];
+  }, [customTemplates]);
+
+  const allTemplatesByKey = useMemo(() => {
+    const m = {};
+    for (const t of allTemplates) m[t.key] = t;
+    return m;
+  }, [allTemplates]);
+
   const [activeKey, setActiveKey] = useState(TEMPLATES[0].key);
   /* Seed draft and persisted from the SAME read so freshly-generated block
    * ids don't make the dirty-check fire on mount. */
-  const [draft, setDraft] = useState(() => readTemplates());
+  const [draft, setDraft] = useState(() => readTemplates(allTemplates));
   const [persisted, setPersisted] = useState(() => JSON.parse(JSON.stringify(draft)));
   const [toast, setToast] = useState(null);
+
+  /* Seed any custom-template entries that were added since the last read. */
+  useEffect(() => {
+    setDraft((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const t of allTemplates) {
+        if (!next[t.key]) {
+          changed = true;
+          next[t.key] = {
+            ...t.defaults,
+            blocks: bodyToBlocks(t.defaults.body),
+            includeUnsubscribe: false,
+          };
+        }
+      }
+      return changed ? next : prev;
+    });
+    setPersisted((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const t of allTemplates) {
+        if (!next[t.key]) {
+          changed = true;
+          next[t.key] = {
+            ...t.defaults,
+            blocks: bodyToBlocks(t.defaults.body),
+            includeUnsubscribe: false,
+          };
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [allTemplates]);
+
+  /* Live values for the preview tokens. Pulled from the AuthContext +
+   * BrandingContext so {{organizationName}}, {{recipientName}} etc. show
+   * the actual user / org instead of "Acme Corp" / "John Doe". When the
+   * editor is opened by an unauthenticated user (e.g. Super Admin demo
+   * with no DB user), we fall back to the branding-derived defaults. */
+  const ctxVars = useMemo(() => {
+    const orgFromUser =
+      (user && (user.organizationId || user.organisationId || user.organization)) || null;
+    const orgName =
+      (orgFromUser && (orgFromUser.name || orgFromUser.legalName)) ||
+      user?.orgName ||
+      branding?.name ||
+      'Your Organisation';
+    const recipientName = user?.name || user?.fullName || 'there';
+    return {
+      organizationName: orgName,
+      orgName,
+      recipientName,
+      visitorName: recipientName,
+      ownerName: recipientName,
+      staffName: recipientName,
+      platformName: branding?.name || 'CorpGMS',
+      ownerEmail: user?.email || '',
+      website: orgFromUser?.website || '',
+      logoUrl:  orgFromUser?.logoUrl || branding?.logoDataUrl || '',
+      tagline:  branding?.tagline || '',
+    };
+  }, [user, branding]);
 
   const dirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(persisted),
@@ -278,14 +455,17 @@ export default function EmailTemplates() {
   useEffect(() => {
     const onStorage = (e) => {
       if (e.key === STORAGE_KEY) {
-        const next = readTemplates();
+        const next = readTemplates(allTemplates);
         setPersisted(next);
         setDraft(next);
+      }
+      if (e.key === CUSTOM_STORAGE_KEY) {
+        setCustomTemplates(loadCustomList());
       }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, []);
+  }, [allTemplates]);
 
   /* Pull persisted templates from the backend on mount and merge into
    * localStorage so the editor and the server stay in sync across
@@ -311,7 +491,7 @@ export default function EmailTemplates() {
           };
         }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        const next = readTemplates();
+        const next = readTemplates(allTemplates);
         setPersisted(next);
         setDraft(next);
       } catch {
@@ -321,8 +501,83 @@ export default function EmailTemplates() {
     return () => { cancelled = true; };
   }, []);
 
-  const meta = TEMPLATES_BY_KEY[activeKey];
+  const meta = allTemplatesByKey[activeKey] || allTemplates[0];
   const current = draft[activeKey] || { subject: '', body: '', blocks: [], includeUnsubscribe: false };
+
+  /* If the active key got removed (e.g. user deleted a custom template),
+   * fall back to the first built-in. */
+  useEffect(() => {
+    if (!allTemplatesByKey[activeKey]) {
+      setActiveKey(TEMPLATES[0].key);
+    }
+  }, [allTemplatesByKey, activeKey]);
+
+  /* "+ New Template" modal state. */
+  const [showNewModal,  setShowNewModal]  = useState(false);
+  const [newName,       setNewName]       = useState('');
+  const [newKey,        setNewKey]        = useState('');
+  const [newKeyDirty,   setNewKeyDirty]   = useState(false);
+  const [newSubject,    setNewSubject]    = useState('');
+  const [newError,      setNewError]      = useState('');
+
+  const openNewModal = () => {
+    setNewName('');
+    setNewKey('');
+    setNewKeyDirty(false);
+    setNewSubject('');
+    setNewError('');
+    setShowNewModal(true);
+  };
+
+  const handleNewNameChange = (val) => {
+    setNewName(val);
+    if (!newKeyDirty) setNewKey(slugifyKey(val));
+  };
+
+  const handleCreateCustomTemplate = () => {
+    setNewError('');
+    const label = newName.trim();
+    if (!label) return setNewError('Template name is required.');
+    const key = (newKey || slugifyKey(label)).trim();
+    if (!key) return setNewError('Template key is required.');
+    if (allTemplatesByKey[key]) return setNewError('A template with this key already exists.');
+    const subject = newSubject.trim() || `${label} — {{organizationName}}`;
+    const entry = {
+      key,
+      label,
+      description: 'Custom template',
+      tokens: CUSTOM_DEFAULT_TOKENS,
+      defaultSubject: subject,
+      defaultBody:    `<p>Hello {{recipientName}},</p>\n<p>This is a custom email from <strong>{{organizationName}}</strong>.</p>\n<p>— Sent via {{platformName}}</p>`,
+      createdAt: new Date().toISOString(),
+    };
+    const nextList = [...customTemplates, entry];
+    setCustomTemplates(nextList);
+    saveCustomList(nextList);
+    /* Make sure the draft + persisted maps know about the new key right
+     * away so the editor can switch to it without a stale-key flash. */
+    const seed = {
+      subject: entry.defaultSubject,
+      body:    entry.defaultBody,
+      blocks:  bodyToBlocks(entry.defaultBody),
+      includeUnsubscribe: false,
+    };
+    setDraft((d) => ({ ...d, [key]: seed }));
+    setPersisted((p) => ({ ...p, [key]: JSON.parse(JSON.stringify(seed)) }));
+    setActiveKey(key);
+    setShowNewModal(false);
+    setToast({ type: 'success', msg: `Custom template "${label}" created.` });
+  };
+
+  const handleDeleteCustomTemplate = (key) => {
+    if (!key || !key.startsWith('custom_')) return;
+    const next = customTemplates.filter((c) => c.key !== key);
+    setCustomTemplates(next);
+    saveCustomList(next);
+    setDraft((d) => { const n = { ...d }; delete n[key]; return n; });
+    setPersisted((p) => { const n = { ...p }; delete n[key]; return n; });
+    if (activeKey === key) setActiveKey(TEMPLATES[0].key);
+  };
 
   /* Drag-state for the block editor. dragSrcRef holds the index of the
    * block being dragged; dragOverIdx triggers a visual indicator on the
@@ -465,6 +720,22 @@ export default function EmailTemplates() {
    * sent to the generator is assembled from the block editor and, when
    * the unsubscribe toggle is on, suffixed with the unsubscribe footer. */
   const previewEnvelope = useMemo(() => {
+    /* Custom templates have no `meta.render()`. Render inline using the
+     * live AuthContext / BrandingContext values so the author sees the
+     * preview filled with real org / user data instead of placeholders. */
+    if (meta && meta.isCustom) {
+      const t = draft[activeKey] || {};
+      const assembled = blocksToBody(t.blocks || []);
+      const withUnsub = t.includeUnsubscribe
+        ? `${assembled}\n${UNSUBSCRIBE_HTML}`
+        : assembled;
+      return renderCustomPreview({
+        subject: t.subject || '',
+        body:    withUnsub,
+        ctxVars,
+      });
+    }
+
     let original = null;
     try {
       original = localStorage.getItem(STORAGE_KEY);
@@ -481,7 +752,18 @@ export default function EmailTemplates() {
     } catch { /* ignore */ }
     let envelope = { subject: '', html: '', text: '' };
     try {
-      envelope = meta.render() || envelope;
+      envelope = (meta && meta.render && meta.render()) || envelope;
+      /* For built-in templates, post-process the rendered envelope to
+       * substitute the live org / user context tokens that survived the
+       * sample-data render — so authors of customised built-ins also see
+       * their actual organisation, not "Acme Corp" / "John Doe". */
+      if (envelope && envelope.html) {
+        envelope = {
+          ...envelope,
+          subject: fillCustomTokens(envelope.subject, ctxVars),
+          html:    fillCustomTokens(envelope.html,    ctxVars),
+        };
+      }
     } catch (err) {
       envelope = {
         subject: '(preview failed)',
@@ -494,10 +776,10 @@ export default function EmailTemplates() {
       } catch { /* ignore */ }
     }
     return envelope;
-  }, [draft, meta]);
+  }, [draft, meta, activeKey, ctxVars]);
 
   return (
-    <div className="cgms-email-templates" style={{ padding: 28, background: 'var(--app-bg)', minHeight: '100vh', fontFamily: "'Outfit','Plus Jakarta Sans',sans-serif" }}>
+    <div className="cgms-email-templates cgms-email-templates-page" style={{ padding: 28, background: 'var(--app-bg)', minHeight: '100vh', fontFamily: "'Outfit','Plus Jakarta Sans',sans-serif", color: 'var(--app-text)' }}>
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
@@ -529,33 +811,94 @@ export default function EmailTemplates() {
       </div>
 
       {/* Type picker */}
-      <div role="tablist" aria-label="Email template type" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 18 }}>
-        {TEMPLATES.map((t) => {
+      <div role="tablist" aria-label="Email template type" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 18, alignItems: 'center' }}>
+        {allTemplates.map((t) => {
           const on = t.key === activeKey;
           return (
-            <button
-              key={t.key}
-              role="tab"
-              aria-selected={on}
-              onClick={() => setActiveKey(t.key)}
-              style={{
-                padding: '8px 14px',
-                borderRadius: 10,
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                background: on ? '#0284C7' : 'var(--app-surface,#fff)',
-                color: on ? '#fff' : '#475569',
-                border: `1.5px solid ${on ? '#0284C7' : '#E2E8F0'}`,
-                transition: 'all .15s ease',
-              }}
-            >
-              {t.label}
-            </button>
+            <span key={t.key} style={{ display: 'inline-flex', alignItems: 'center' }}>
+              <button
+                role="tab"
+                aria-selected={on}
+                onClick={() => setActiveKey(t.key)}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: t.isCustom ? '10px 0 0 10px' : 10,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  background: on ? '#0284C7' : 'var(--app-surface,#fff)',
+                  color: on ? '#fff' : '#475569',
+                  border: `1.5px solid ${on ? '#0284C7' : '#E2E8F0'}`,
+                  borderRight: t.isCustom ? 'none' : `1.5px solid ${on ? '#0284C7' : '#E2E8F0'}`,
+                  transition: 'all .15s ease',
+                }}
+              >
+                {t.label}{t.isCustom ? ' ★' : ''}
+              </button>
+              {t.isCustom && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteCustomTemplate(t.key)}
+                  aria-label={`Delete custom template ${t.label}`}
+                  title="Delete custom template"
+                  style={{
+                    padding: '8px 8px',
+                    borderRadius: '0 10px 10px 0',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    background: on ? '#0284C7' : 'var(--app-surface,#fff)',
+                    color: on ? '#fff' : '#B91C1C',
+                    border: `1.5px solid ${on ? '#0284C7' : '#E2E8F0'}`,
+                    borderLeft: 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </span>
           );
         })}
+        <button
+          type="button"
+          onClick={openNewModal}
+          style={{
+            padding: '8px 12px',
+            borderRadius: 10,
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            background: '#F0F9FF',
+            color: '#0284C7',
+            border: '1.5px dashed #BAE6FD',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+          title="Create a new custom email template"
+        >
+          <FilePlus size={13} aria-hidden="true" />
+          New Template
+        </button>
       </div>
+
+      {showNewModal && (
+        <NewTemplateModal
+          name={newName}
+          onNameChange={handleNewNameChange}
+          keyValue={newKey}
+          onKeyChange={(v) => { setNewKey(slugifyKey(v)); setNewKeyDirty(true); }}
+          subject={newSubject}
+          onSubjectChange={setNewSubject}
+          error={newError}
+          onCancel={() => setShowNewModal(false)}
+          onCreate={handleCreateCustomTemplate}
+        />
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
         {/* ── Editor ── */}
@@ -872,4 +1215,107 @@ function tokenBtnStyle() {
     cursor: 'pointer',
     fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace',
   };
+}
+
+/* ─── New Custom Template modal ─── */
+function NewTemplateModal({
+  name, onNameChange,
+  keyValue, onKeyChange,
+  subject, onSubjectChange,
+  error, onCancel, onCreate,
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(15, 23, 42, 0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(440px, 100%)',
+          background: '#fff', borderRadius: 14,
+          boxShadow: '0 18px 48px rgba(15, 23, 42, 0.25)',
+          padding: 22,
+          fontFamily: "'Outfit','Plus Jakarta Sans',sans-serif",
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0C2340' }}>New custom template</h2>
+            <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94A3B8' }}>
+              Supports <code>{'{{organizationName}}'}</code>, <code>{'{{recipientName}}'}</code>, <code>{'{{platformName}}'}</code> by default.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Close"
+            style={{
+              border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer',
+              borderRadius: 8, width: 30, height: 30, color: '#475569',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <label style={labelStyle()}>Template Name</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => onNameChange(e.target.value)}
+            placeholder="e.g. Quarterly Newsletter"
+            autoFocus
+            style={inputStyle()}
+          />
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <label style={labelStyle()}>Template Key (auto-slugified)</label>
+          <input
+            type="text"
+            value={keyValue}
+            onChange={(e) => onKeyChange(e.target.value)}
+            placeholder="custom_quarterly_newsletter"
+            style={{ ...inputStyle(), fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace' }}
+          />
+          <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>
+            Used as the storage key. Must be unique across templates.
+          </p>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <label style={labelStyle()}>Default Subject</label>
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => onSubjectChange(e.target.value)}
+            placeholder="Hello {{recipientName}} from {{organizationName}}"
+            style={inputStyle()}
+          />
+        </div>
+
+        {error && (
+          <p style={{ fontSize: 12, color: '#DC2626', fontWeight: 600, marginTop: 10 }}>{error}</p>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onCancel} style={btnStyle('#94A3B8', true)}>Cancel</button>
+          <button onClick={onCreate} style={btnStyle('#0284C7', false)}>
+            <Plus size={13} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -42,14 +42,19 @@ uri: required('MONGO_URI'),
       .filter(Boolean),
   },
 
+  /* SMTP — values are .trim()'d so trailing whitespace in .env (e.g.
+   * `SMTP_PORT=587  ` from a copy-paste) doesn't poison parseInt or
+   * truthy comparisons. SMTP_PASS is accepted as an alias for
+   * SMTP_PASSWORD because that's the convention quoted in most Gmail
+   * App Password tutorials. */
   smtp: {
-    host: process.env.SMTP_HOST || '',
-    port: parseInt(process.env.SMTP_PORT || '587', 10),
-    secure: (process.env.SMTP_SECURE || 'false') === 'true',
-    user: process.env.SMTP_USER || '',
-    password: process.env.SMTP_PASSWORD || '',
-    fromName: process.env.EMAIL_FROM_NAME || 'Guest Management',
-    fromAddress: process.env.EMAIL_FROM_ADDRESS || 'no-reply@example.com',
+    host: (process.env.SMTP_HOST || '').trim(),
+    port: parseInt((process.env.SMTP_PORT || '587').trim(), 10),
+    secure: (process.env.SMTP_SECURE || 'false').trim().toLowerCase() === 'true',
+    user: (process.env.SMTP_USER || '').trim(),
+    password: (process.env.SMTP_PASSWORD || process.env.SMTP_PASS || '').trim(),
+    fromName: (process.env.EMAIL_FROM_NAME || 'Guest Management').trim(),
+    fromAddress: (process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_FROM || 'no-reply@example.com').trim(),
   },
 
   whatsapp: {

@@ -9,6 +9,30 @@ const EMPTY = {
   minOrderAmount: '', maxDiscountAmount: '',
 };
 
+/* Shared Tailwind class fragments. Centralised so every input/select on
+ * this page picks up the same dark-mode-aware tokens; the page used to
+ * hard-code colours in inline style objects which `dark:` could never
+ * override. */
+const inputClasses =
+  'w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 ' +
+  'placeholder:text-slate-400 outline-none transition-colors ' +
+  'focus:border-primary-500 focus:bg-white focus:ring-2 focus:ring-primary-500/20 ' +
+  'dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ' +
+  'dark:placeholder:text-slate-500 dark:focus:bg-slate-800 dark:focus:border-primary-400';
+
+const labelClasses =
+  'mb-1.5 block text-xs font-semibold text-slate-600 dark:text-slate-300';
+
+const cardClasses =
+  'rounded-xl border border-slate-200 bg-white p-5 shadow-sm ' +
+  'dark:border-slate-800 dark:bg-slate-900';
+
+const iconBtnClasses =
+  'inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white p-2 ' +
+  'text-slate-500 transition-colors hover:border-primary-300 hover:bg-primary-50 hover:text-primary-700 ' +
+  'dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 ' +
+  'dark:hover:border-primary-400/60 dark:hover:bg-slate-700 dark:hover:text-primary-200';
+
 export default function CouponsPage() {
   const [coupons, setCoupons]   = useState([]);
   const [loading, setLoading]   = useState(false);
@@ -99,7 +123,7 @@ export default function CouponsPage() {
   }
 
   return (
-    <div style={{ padding: 28, maxWidth: 1000, margin: '0 auto' }}>
+    <div className="mx-auto w-full max-w-5xl">
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
       {pendingDelete && (
         <ConfirmModal
@@ -109,60 +133,109 @@ export default function CouponsPage() {
           onCancel={() => setPendingDelete(null)}
         />
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0C2340', margin: 0 }}>Coupon Codes</h1>
-          <p style={{ color: '#64748B', fontSize: 13, marginTop: 4 }}>Create discount codes for subscription checkout</p>
+
+      {/* Header — title left, action button right; stacks on mobile so the
+          New Coupon button never crashes into the title. */}
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="font-display text-xl font-bold text-slate-900 sm:text-2xl dark:text-white">
+            Coupon Codes
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Create discount codes for subscription checkout
+          </p>
         </div>
-        <button onClick={() => setShowForm(true)} style={btnStyle('#0284C7')}>
+        <button
+          onClick={() => setShowForm(true)}
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-sky-700 dark:bg-sky-500 dark:hover:bg-sky-400"
+        >
           <Plus size={16} /> New Coupon
         </button>
       </div>
 
       {showForm && (
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 18 }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Create Coupon</h3>
-            <button onClick={() => setShowForm(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={18} /></button>
+        <div className={`${cardClasses} mb-4`}>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">Create Coupon</h3>
+            <button
+              onClick={() => setShowForm(false)}
+              aria-label="Close"
+              className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+            >
+              <X size={18} />
+            </button>
           </div>
-          <div style={gridStyle}>
+
+          <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
             <Field label="Code *" value={form.code} onChange={(v) => setForm((p) => ({ ...p, code: v.toUpperCase() }))} placeholder="e.g. LAUNCH50" />
             <Field label="Description" value={form.description} onChange={(v) => setForm((p) => ({ ...p, description: v }))} />
+
             <div>
-              <label style={labelStyle}>Discount Type *</label>
-              <select value={form.discountType} onChange={(e) => setForm((p) => ({ ...p, discountType: e.target.value }))} style={inputStyle}>
+              <label className={labelClasses}>Discount Type *</label>
+              <select
+                value={form.discountType}
+                onChange={(e) => setForm((p) => ({ ...p, discountType: e.target.value }))}
+                className={inputClasses}
+              >
                 <option value="PERCENTAGE">Percentage (%)</option>
                 <option value="FLAT">Flat Amount (₹)</option>
               </select>
             </div>
-            <Field label="Discount Value *" value={form.discountValue} onChange={(v) => setForm((p) => ({ ...p, discountValue: v }))} placeholder={form.discountType === 'PERCENTAGE' ? 'e.g. 20' : 'e.g. 500'} type="number" />
+
+            <Field
+              label="Discount Value *"
+              value={form.discountValue}
+              onChange={(v) => setForm((p) => ({ ...p, discountValue: v }))}
+              placeholder={form.discountType === 'PERCENTAGE' ? 'e.g. 20' : 'e.g. 500'}
+              type="number"
+            />
             <Field label="Usage Limit (blank = unlimited)" value={form.usageLimit} onChange={(v) => setForm((p) => ({ ...p, usageLimit: v }))} type="number" />
             <Field label="Min Order Amount (₹)" value={form.minOrderAmount} onChange={(v) => setForm((p) => ({ ...p, minOrderAmount: v }))} type="number" />
             <Field label="Valid From" value={form.validFrom} onChange={(v) => setForm((p) => ({ ...p, validFrom: v }))} type="date" />
             <Field label="Valid Until (blank = never)" value={form.validUntil} onChange={(v) => setForm((p) => ({ ...p, validUntil: v }))} type="date" />
           </div>
-          <div style={{ marginTop: 12 }}>
-            <label style={labelStyle}>Applicable Plans (blank = all plans)</label>
-            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+
+          <div className="mt-4">
+            <label className={labelClasses}>Applicable Plans (blank = all plans)</label>
+            <div className="mt-1 flex flex-wrap gap-3">
               {['Starter', 'Professional', 'Enterprise'].map((pl) => (
-                <label key={pl} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={form.applicablePlans.includes(pl)}
+                <label
+                  key={pl}
+                  className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 transition-colors hover:border-primary-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-400/60"
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.applicablePlans.includes(pl)}
                     onChange={(e) => setForm((p) => ({
                       ...p,
                       applicablePlans: e.target.checked
                         ? [...p.applicablePlans, pl]
                         : p.applicablePlans.filter((x) => x !== pl),
                     }))}
+                    className="accent-primary-500"
                   />
                   {pl}
                 </label>
               ))}
             </div>
           </div>
-          {error && <p style={{ color: '#DC2626', fontSize: 13, marginTop: 10 }}>{error}</p>}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
-            <button onClick={() => setShowForm(false)} style={btnStyle('#64748B')}>Cancel</button>
-            <button onClick={saveCoupon} disabled={saving} style={btnStyle('#059669')}>
+
+          {error && (
+            <p className="mt-3 text-sm text-rose-600 dark:text-rose-400">{error}</p>
+          )}
+
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button
+              onClick={() => setShowForm(false)}
+              className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={saveCoupon}
+              disabled={saving}
+              className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-emerald-500 dark:hover:bg-emerald-400"
+            >
               {saving ? 'Saving...' : 'Create Coupon'}
             </button>
           </div>
@@ -170,39 +243,75 @@ export default function CouponsPage() {
       )}
 
       {loading ? (
-        <p style={{ color: '#64748B', textAlign: 'center', marginTop: 40 }}>Loading coupons...</p>
+        <p className="mt-10 text-center text-sm text-slate-500 dark:text-slate-400">Loading coupons...</p>
       ) : coupons.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '60px 0', color: '#94A3B8' }}>
-          <Tag size={40} style={{ marginBottom: 12, opacity: 0.4 }} />
-          <p>No coupons yet. Create your first coupon above.</p>
+        <div className="py-16 text-center text-slate-400 dark:text-slate-500">
+          <Tag size={40} className="mx-auto mb-3 opacity-50" />
+          <p className="text-sm">No coupons yet. Create your first coupon above.</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="flex flex-col gap-3">
           {coupons.map((c) => (
-            <div key={c._id} style={{ ...cardStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                <div style={{ background: c.isActive ? '#ECFDF5' : '#F1F5F9', borderRadius: 8, padding: '6px 12px' }}>
-                  <span style={{ fontWeight: 700, fontSize: 15, color: c.isActive ? '#059669' : '#94A3B8', fontFamily: 'monospace' }}>{c.code}</span>
+            <div
+              key={c._id}
+              className={`${cardClasses} flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:p-5`}
+            >
+              <div className="flex min-w-0 flex-wrap items-center gap-3 sm:gap-4">
+                {/* Coupon code pill — mono font, contrast tuned for both modes. */}
+                <div
+                  className={
+                    c.isActive
+                      ? 'rounded-md bg-emerald-50 px-3 py-1.5 dark:bg-emerald-500/15'
+                      : 'rounded-md bg-slate-100 px-3 py-1.5 dark:bg-slate-800'
+                  }
+                >
+                  <span
+                    className={
+                      'font-mono text-base font-bold tracking-wide ' +
+                      (c.isActive
+                        ? 'text-emerald-700 dark:text-emerald-300'
+                        : 'text-slate-400 dark:text-slate-500')
+                    }
+                  >
+                    {c.code}
+                  </span>
                 </div>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 13, color: '#1E293B' }}>
+
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
                     {c.discountType === 'PERCENTAGE' ? `${c.discountValue}% off` : `₹${c.discountValue} off`}
-                    {c.applicablePlans?.length > 0 && <span style={{ color: '#64748B', fontWeight: 400 }}> · {c.applicablePlans.join(', ')}</span>}
+                    {c.applicablePlans?.length > 0 && (
+                      <span className="font-normal text-slate-500 dark:text-slate-400"> · {c.applicablePlans.join(', ')}</span>
+                    )}
                   </div>
-                  <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 2 }}>
+                  <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                     Used {c.usedCount}{c.usageLimit ? `/${c.usageLimit}` : ''} times
                     {c.validUntil && ` · Expires ${new Date(c.validUntil).toLocaleDateString()}`}
                   </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => copyCode(c.code)} style={iconBtn} title="Copy code">
-                  {copied === c.code ? <Check size={15} color="#059669" /> : <Copy size={15} />}
+
+              {/* Action row — wraps on small screens instead of overflowing. */}
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <button onClick={() => copyCode(c.code)} className={iconBtnClasses} title="Copy code" aria-label="Copy coupon code">
+                  {copied === c.code ? <Check size={15} className="text-emerald-600 dark:text-emerald-400" /> : <Copy size={15} />}
                 </button>
-                <button onClick={() => toggleCoupon(c._id, c.isActive)} style={iconBtn} title={c.isActive ? 'Deactivate' : 'Activate'}>
-                  {c.isActive ? <ToggleRight size={18} color="#059669" /> : <ToggleLeft size={18} color="#94A3B8" />}
+                <button
+                  onClick={() => toggleCoupon(c._id, c.isActive)}
+                  className={iconBtnClasses}
+                  title={c.isActive ? 'Deactivate' : 'Activate'}
+                  aria-label={c.isActive ? 'Deactivate coupon' : 'Activate coupon'}
+                >
+                  {c.isActive
+                    ? <ToggleRight size={18} className="text-emerald-600 dark:text-emerald-400" />
+                    : <ToggleLeft  size={18} className="text-slate-400 dark:text-slate-500" />}
                 </button>
-                <button onClick={() => setPendingDelete(c)} style={{ ...iconBtn, color: '#DC2626', borderColor: 'rgba(220,38,38,0.3)', background: 'rgba(220,38,38,0.08)' }} title={`Delete coupon ${c.code}`}>
+                <button
+                  onClick={() => setPendingDelete(c)}
+                  title={`Delete coupon ${c.code}`}
+                  aria-label={`Delete coupon ${c.code}`}
+                  className="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-600 transition-colors hover:border-rose-300 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20"
+                >
                   <Trash2 size={15} />
                 </button>
               </div>
@@ -217,15 +326,14 @@ export default function CouponsPage() {
 function Field({ label, value, onChange, placeholder, type = 'text' }) {
   return (
     <div>
-      <label style={labelStyle}>{label}</label>
-      <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} style={inputStyle} />
+      <label className={labelClasses}>{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={inputClasses}
+      />
     </div>
   );
 }
-
-const cardStyle  = { background: '#fff', border: '1px solid #E2E8F0', borderRadius: 12, padding: 20, marginBottom: 12 };
-const gridStyle  = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 18px' };
-const labelStyle = { fontSize: 12, fontWeight: 600, color: '#475569', display: 'block', marginBottom: 5 };
-const inputStyle = { width: '100%', padding: '8px 11px', borderRadius: 8, border: '1.5px solid #E2E8F0', fontSize: 13, color: '#1E293B', outline: 'none', boxSizing: 'border-box', background: '#F8FAFC' };
-const iconBtn    = { background: 'none', border: '1px solid #E2E8F0', borderRadius: 7, padding: '5px 8px', cursor: 'pointer', color: '#64748B', display: 'flex', alignItems: 'center' };
-const btnStyle   = (bg) => ({ background: bg, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 });

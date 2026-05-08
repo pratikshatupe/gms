@@ -17,6 +17,15 @@
   --app-text:           #0f172a;
   --app-text-muted:     #475569;
   --app-text-subtle:    #94a3b8;
+  /* Short-name aliases used by SuperAdminSettings.jsx + EmailTemplates.jsx
+   * inline styles. They reference var(--bg) / var(--card) / var(--text) /
+   * var(--border) directly; without these definitions those resolve to
+   * empty in dark mode and the cards stay white-on-dark. */
+  --bg:                 var(--app-bg);
+  --card:               var(--app-surface);
+  --text:               var(--app-text);
+  --border:             var(--app-border);
+  --muted:              var(--app-text-muted);
   --brand-primary:      #6c5ce7;
   --brand-primary-light:#a29bfe;
   --brand-primary-dark: #5a4bd1;
@@ -55,6 +64,14 @@ html[data-theme="dark"] {
   --app-text:           #e2e8f0;
   --app-text-muted:     #94a3b8;
   --app-text-subtle:    #64748b;
+  /* Dark-mode aliases — see :root above. The variables themselves are
+   * `var()` references so they automatically pick up the dark values
+   * from --app-bg / --app-surface / etc. */
+  --bg:                 var(--app-bg);
+  --card:               var(--app-surface);
+  --text:               var(--app-text);
+  --border:             var(--app-border);
+  --muted:              var(--app-text-muted);
   --brand-primary:      #a29bfe;
   --brand-primary-light:#c4b8ff;
   --brand-primary-dark: #6c5ce7;
@@ -169,17 +186,69 @@ html[data-theme="dark"] body { background-color: var(--app-bg) !important; color
 html[data-theme="dark"] main { background-color: var(--app-bg) !important; }
 html[data-theme="dark"] .bg-white           { background-color: var(--app-surface) !important; }
 html[data-theme="dark"] .bg-slate-50        { background-color: var(--app-surface-muted) !important; }
+html[data-theme="dark"] .bg-slate-100       { background-color: var(--app-surface-muted) !important; }
 html[data-theme="dark"] .bg-\[\#F8F7FF\]    { background-color: var(--app-bg) !important; }
 html[data-theme="dark"] .bg-\[\#F0F9FF\]    { background-color: var(--app-bg) !important; }
 html[data-theme="dark"] .border-slate-100   { border-color: var(--app-border) !important; }
 html[data-theme="dark"] .border-slate-200   { border-color: var(--app-border) !important; }
+html[data-theme="dark"] .border-slate-300   { border-color: var(--app-border-strong) !important; }
 html[data-theme="dark"] .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: var(--app-border) !important; }
+html[data-theme="dark"] .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-color: var(--app-border) !important; }
 html[data-theme="dark"] .text-\[\#1E1B4B\]  { color: var(--app-text) !important; }
 html[data-theme="dark"] .text-\[\#0C2340\]  { color: var(--app-text) !important; }
+html[data-theme="dark"] .text-\[\#0f172a\]  { color: var(--app-text) !important; }
+html[data-theme="dark"] .text-slate-900     { color: var(--app-text) !important; }
+html[data-theme="dark"] .text-slate-800     { color: #e9e4ff !important; }
 html[data-theme="dark"] .text-slate-700     { color: #e9e4ff !important; }
-html[data-theme="dark"] .text-slate-600     { color: #94a3b8 !important; }
+html[data-theme="dark"] .text-slate-600     { color: #cbd5e1 !important; }
 html[data-theme="dark"] .text-slate-500     { color: var(--app-text-muted) !important; }
 html[data-theme="dark"] .text-slate-400     { color: #64748b !important; }
+
+/* Pastel utility backgrounds (50/100) used for stat cards and badges
+   across Admin, SuperAdminSettings, EmailTemplates. In dark mode they
+   render as bright washes that crush text — soften them to tinted dark
+   surfaces while keeping the hue. Foreground colours (text-emerald-700
+   etc.) stay readable because they were already chosen for contrast
+   on a tinted background. */
+html[data-theme="dark"] .bg-emerald-50  { background-color: rgba(16,185,129,0.10) !important; }
+html[data-theme="dark"] .bg-emerald-100 { background-color: rgba(16,185,129,0.15) !important; }
+html[data-theme="dark"] .bg-amber-50    { background-color: rgba(245,158,11,0.10) !important; }
+html[data-theme="dark"] .bg-amber-100   { background-color: rgba(245,158,11,0.15) !important; }
+html[data-theme="dark"] .bg-red-50      { background-color: rgba(239,68,68,0.10)  !important; }
+html[data-theme="dark"] .bg-red-100     { background-color: rgba(239,68,68,0.15)  !important; }
+html[data-theme="dark"] .bg-rose-50     { background-color: rgba(244,63,94,0.10)  !important; }
+html[data-theme="dark"] .bg-blue-50     { background-color: rgba(59,130,246,0.10) !important; }
+html[data-theme="dark"] .bg-blue-100    { background-color: rgba(59,130,246,0.15) !important; }
+html[data-theme="dark"] .bg-sky-50      { background-color: rgba(14,165,233,0.10) !important; }
+html[data-theme="dark"] .bg-sky-100     { background-color: rgba(14,165,233,0.15) !important; }
+
+/* Pastel borders → translucent so the tinted card edges still read
+   in dark mode without being a hard white line. */
+html[data-theme="dark"] .border-emerald-100,
+html[data-theme="dark"] .border-emerald-200 { border-color: rgba(16,185,129,0.30) !important; }
+html[data-theme="dark"] .border-amber-100,
+html[data-theme="dark"] .border-amber-200,
+html[data-theme="dark"] .border-amber-300   { border-color: rgba(245,158,11,0.30) !important; }
+html[data-theme="dark"] .border-red-100,
+html[data-theme="dark"] .border-red-200     { border-color: rgba(239,68,68,0.30)  !important; }
+html[data-theme="dark"] .border-blue-100,
+html[data-theme="dark"] .border-blue-200    { border-color: rgba(59,130,246,0.30) !important; }
+html[data-theme="dark"] .border-sky-100,
+html[data-theme="dark"] .border-sky-200     { border-color: rgba(14,165,233,0.30) !important; }
+
+/* Pastel-on-pastel text: lighten to keep contrast on the new darker
+   tinted surfaces above. Light-mode keeps its 700 weights. */
+html[data-theme="dark"] .text-emerald-700,
+html[data-theme="dark"] .text-emerald-800   { color: #6ee7b7 !important; }
+html[data-theme="dark"] .text-amber-700,
+html[data-theme="dark"] .text-amber-800,
+html[data-theme="dark"] .text-amber-900     { color: #fcd34d !important; }
+html[data-theme="dark"] .text-red-700,
+html[data-theme="dark"] .text-red-800       { color: #fca5a5 !important; }
+html[data-theme="dark"] .text-blue-700,
+html[data-theme="dark"] .text-blue-800      { color: #93c5fd !important; }
+html[data-theme="dark"] .text-sky-700,
+html[data-theme="dark"] .text-sky-800       { color: #7dd3fc !important; }
 html[data-theme="dark"] { background-color: var(--app-bg) !important; color: var(--app-text) !important; }
 html[data-theme="dark"] * { background-color: transparent; color: inherit; }
 
@@ -213,21 +282,51 @@ html:not([data-theme="dark"]) .cgms-login-page .right-panel label { color: #333 
 html:not([data-theme="dark"]) .cgms-login-page .right-panel p { color: #333 !important; }
 html:not([data-theme="dark"]) .cgms-login-page .back-btn { color: #333 !important; }
 
+/* ─── Admin / SuperAdmin / Page-level wrappers ──────────────
+   These selectors share the same dark-mode treatment as the
+   settings page. Pages opt in by adding the wrapper class to
+   their outermost div. */
 html[data-theme="dark"] .cgms-settings-page,
-html[data-theme="dark"] .cgms-rolepermission-page {
+html[data-theme="dark"] .cgms-rolepermission-page,
+html[data-theme="dark"] .cgms-admin-page,
+html[data-theme="dark"] .cgms-superadmin-settings-page,
+html[data-theme="dark"] .cgms-email-templates-page,
+html[data-theme="dark"] .cgms-coupons-page {
   background-color: var(--app-bg) !important;
   color: var(--app-text) !important;
 }
+/* Inline-style colour catch-all for the wrapped pages above. Triggers
+   when a JSX `style={{ background: '#fff' }}` or similar lands in the
+   DOM as `rgb(255, 255, 255)` etc. The Admin / SuperAdmin / Email
+   Templates / Coupons wrappers all opt into the same set of overrides
+   so cards, inputs, and tables stay readable in dark mode without
+   touching the page source. */
 html[data-theme="dark"] .cgms-settings-page [style*="rgb(255, 255, 255)"],
 html[data-theme="dark"] .cgms-rolepermission-page [style*="rgb(255, 255, 255)"],
+html[data-theme="dark"] .cgms-admin-page [style*="rgb(255, 255, 255)"],
+html[data-theme="dark"] .cgms-superadmin-settings-page [style*="rgb(255, 255, 255)"],
+html[data-theme="dark"] .cgms-email-templates-page [style*="rgb(255, 255, 255)"],
+html[data-theme="dark"] .cgms-coupons-page [style*="rgb(255, 255, 255)"],
 html[data-theme="dark"] .cgms-settings-page [style*="rgb(248, 247, 255)"],
 html[data-theme="dark"] .cgms-rolepermission-page [style*="rgb(248, 247, 255)"],
+html[data-theme="dark"] .cgms-admin-page [style*="rgb(248, 247, 255)"],
+html[data-theme="dark"] .cgms-superadmin-settings-page [style*="rgb(248, 247, 255)"],
+html[data-theme="dark"] .cgms-email-templates-page [style*="rgb(248, 247, 255)"],
 html[data-theme="dark"] .cgms-settings-page [style*="rgb(240, 249, 255)"],
 html[data-theme="dark"] .cgms-rolepermission-page [style*="rgb(240, 249, 255)"],
+html[data-theme="dark"] .cgms-admin-page [style*="rgb(240, 249, 255)"],
+html[data-theme="dark"] .cgms-superadmin-settings-page [style*="rgb(240, 249, 255)"],
+html[data-theme="dark"] .cgms-email-templates-page [style*="rgb(240, 249, 255)"],
 html[data-theme="dark"] .cgms-settings-page [style*="rgb(249, 250, 251)"],
 html[data-theme="dark"] .cgms-rolepermission-page [style*="rgb(249, 250, 251)"],
+html[data-theme="dark"] .cgms-admin-page [style*="rgb(249, 250, 251)"],
+html[data-theme="dark"] .cgms-superadmin-settings-page [style*="rgb(249, 250, 251)"],
+html[data-theme="dark"] .cgms-email-templates-page [style*="rgb(249, 250, 251)"],
 html[data-theme="dark"] .cgms-settings-page [style*="rgb(248, 250, 252)"],
-html[data-theme="dark"] .cgms-rolepermission-page [style*="rgb(248, 250, 252)"] {
+html[data-theme="dark"] .cgms-rolepermission-page [style*="rgb(248, 250, 252)"],
+html[data-theme="dark"] .cgms-admin-page [style*="rgb(248, 250, 252)"],
+html[data-theme="dark"] .cgms-superadmin-settings-page [style*="rgb(248, 250, 252)"],
+html[data-theme="dark"] .cgms-email-templates-page [style*="rgb(248, 250, 252)"] {
   background-color: var(--app-surface) !important;
   color: var(--app-text) !important;
   border-color: var(--app-border) !important;
@@ -237,19 +336,60 @@ html[data-theme="dark"] .cgms-settings-page select,
 html[data-theme="dark"] .cgms-settings-page textarea,
 html[data-theme="dark"] .cgms-rolepermission-page input,
 html[data-theme="dark"] .cgms-rolepermission-page select,
-html[data-theme="dark"] .cgms-rolepermission-page textarea {
+html[data-theme="dark"] .cgms-rolepermission-page textarea,
+html[data-theme="dark"] .cgms-admin-page input,
+html[data-theme="dark"] .cgms-admin-page select,
+html[data-theme="dark"] .cgms-admin-page textarea,
+html[data-theme="dark"] .cgms-superadmin-settings-page input,
+html[data-theme="dark"] .cgms-superadmin-settings-page select,
+html[data-theme="dark"] .cgms-superadmin-settings-page textarea,
+html[data-theme="dark"] .cgms-email-templates-page input,
+html[data-theme="dark"] .cgms-email-templates-page select,
+html[data-theme="dark"] .cgms-email-templates-page textarea {
   background-color: var(--app-surface-muted) !important;
   color: var(--app-text) !important;
   border-color: var(--app-border) !important;
+}
+/* …but keep the Email Templates LIVE PREVIEW inner card white in
+   dark mode — it represents the actual outgoing email and must look
+   the same as recipients will see. The wrapper around it stays dark. */
+html[data-theme="dark"] .cgms-email-templates-page .email-preview-content,
+html[data-theme="dark"] .cgms-email-templates-page .email-preview-content * {
+  background-color: revert !important;
+  color: revert !important;
 }
 html[data-theme="dark"] .cgms-settings-page table,
 html[data-theme="dark"] .cgms-settings-page th,
 html[data-theme="dark"] .cgms-settings-page td,
 html[data-theme="dark"] .cgms-rolepermission-page table,
 html[data-theme="dark"] .cgms-rolepermission-page th,
-html[data-theme="dark"] .cgms-rolepermission-page td {
+html[data-theme="dark"] .cgms-rolepermission-page td,
+html[data-theme="dark"] .cgms-admin-page table,
+html[data-theme="dark"] .cgms-admin-page th,
+html[data-theme="dark"] .cgms-admin-page td,
+html[data-theme="dark"] .cgms-superadmin-settings-page table,
+html[data-theme="dark"] .cgms-superadmin-settings-page th,
+html[data-theme="dark"] .cgms-superadmin-settings-page td {
   border-color: var(--app-border) !important;
   color: var(--app-text);
+}
+/* Admin/Superadmin tables — kill the white row backgrounds that come
+   from `bg-white` / `bg-slate-50` on <tr> / <tbody>; the global
+   `.bg-white` rule already covers most cases but explicit
+   tbody/tr targeting beats specificity ties on hovered rows. */
+html[data-theme="dark"] .cgms-admin-page tbody,
+html[data-theme="dark"] .cgms-admin-page tr,
+html[data-theme="dark"] .cgms-superadmin-settings-page tbody,
+html[data-theme="dark"] .cgms-superadmin-settings-page tr {
+  background-color: transparent !important;
+}
+html[data-theme="dark"] .cgms-admin-page thead,
+html[data-theme="dark"] .cgms-superadmin-settings-page thead {
+  background-color: var(--app-surface-muted) !important;
+}
+html[data-theme="dark"] .cgms-admin-page tbody tr:hover,
+html[data-theme="dark"] .cgms-superadmin-settings-page tbody tr:hover {
+  background-color: rgba(108,92,231,0.08) !important;
 }
 
 @media (max-width: 1023px) {
@@ -290,7 +430,26 @@ html[data-theme="dark"] .cgms-login-page    [style*="color: rgb(12, 35, 64)"],
 html[data-theme="dark"] .cgms-landing-page [style*="color: rgb(76, 74, 122)"],
 html[data-theme="dark"] .cgms-login-page    [style*="color: rgb(76, 74, 122)"],
 html[data-theme="dark"] .cgms-landing-page [style*="color: rgb(15, 23, 42)"],
-html[data-theme="dark"] .cgms-login-page    [style*="color: rgb(15, 23, 42)"] {
+html[data-theme="dark"] .cgms-login-page    [style*="color: rgb(15, 23, 42)"],
+/* Same dark-text-on-dark-bg catch for the page-level wrappers added
+ * for Admin / SuperAdminSettings / EmailTemplates / Coupons.
+ * Includes both hex and rgb() forms because React preserves whichever
+ * literal the JSX wrote. */
+html[data-theme="dark"] .cgms-admin-page                 [style*="color:#0C2340"],
+html[data-theme="dark"] .cgms-admin-page                 [style*="color: #0C2340"],
+html[data-theme="dark"] .cgms-admin-page                 [style*="color: rgb(12, 35, 64)"],
+html[data-theme="dark"] .cgms-superadmin-settings-page   [style*="color:#0C2340"],
+html[data-theme="dark"] .cgms-superadmin-settings-page   [style*="color: #0C2340"],
+html[data-theme="dark"] .cgms-superadmin-settings-page   [style*="color: rgb(12, 35, 64)"],
+html[data-theme="dark"] .cgms-superadmin-settings-page   [style*="color:#0f172a"],
+html[data-theme="dark"] .cgms-superadmin-settings-page   [style*="color: #0f172a"],
+html[data-theme="dark"] .cgms-superadmin-settings-page   [style*="color: rgb(15, 23, 42)"],
+html[data-theme="dark"] .cgms-email-templates-page       [style*="color:#0C2340"],
+html[data-theme="dark"] .cgms-email-templates-page       [style*="color: #0C2340"],
+html[data-theme="dark"] .cgms-email-templates-page       [style*="color: rgb(12, 35, 64)"],
+html[data-theme="dark"] .cgms-email-templates-page       [style*="color:#0f172a"],
+html[data-theme="dark"] .cgms-email-templates-page       [style*="color: #0f172a"],
+html[data-theme="dark"] .cgms-email-templates-page       [style*="color: rgb(15, 23, 42)"] {
   color: var(--app-text) !important;
 }
 html[data-theme="dark"] .cgms-landing-page input,

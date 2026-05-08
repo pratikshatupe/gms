@@ -25,14 +25,29 @@ function resetTransporter() {
   mailTransporter = null;
 }
 
+/* Returns a config-presence summary that NEVER includes the password.
+ * Used for [EMAIL] SMTP config found: true / false logging. */
+function smtpConfigStatus() {
+  return {
+    host: env.smtp.host || null,
+    port: env.smtp.port || null,
+    secure: env.smtp.secure,
+    user: env.smtp.user || null,
+    fromAddress: env.smtp.fromAddress || null,
+    fromName: env.smtp.fromName || null,
+    hasPassword: Boolean(env.smtp.password),
+    isConfigured: Boolean(env.smtp.host && env.smtp.user && env.smtp.password),
+  };
+}
+
 /* When SMTP isn't configured, fall back to nodemailer's JSON
    streamTransport so the email envelope is captured (and logged)
    instead of being dropped silently. This makes the "did the email
    trigger fire?" question observable in dev without real SMTP. */
 function getMailTransporter() {
   if (mailTransporter) return mailTransporter;
-  if (!env.smtp.host || !env.smtp.user) {
-    logger.warn('[email] SMTP credentials missing — using JSON stream fallback transport. Set SMTP_HOST/SMTP_USER/SMTP_PASSWORD in backend/.env to send real emails.');
+  if (!env.smtp.host || !env.smtp.user || !env.smtp.password) {
+    logger.warn('[EMAIL] SMTP credentials missing — using JSON stream fallback transport. Set SMTP_HOST/SMTP_USER/SMTP_PASSWORD in backend/.env to send real emails.');
     mailTransporter = nodemailer.createTransport({
       streamTransport: true,
       newline: 'unix',
@@ -57,12 +72,35 @@ function getMailTransporter() {
     auth: { user: env.smtp.user, pass: env.smtp.password },
     ...(isGmail ? { requireTLS: true, tls: { rejectUnauthorized: true } } : {}),
   });
-  /* Fire a verify in the background so a bad SMTP config is loud. */
-  mailTransporter.verify().then(
-    () => logger.info(`[email] SMTP transport verified.${isGmail ? ' (Gmail TLS hardening enabled.)' : ''}`),
-    (err) => logger.error('[email] SMTP verify failed: ' + (err && err.message ? err.message : err)),
-  );
+  mailTransporter._isGmail = isGmail;
   return mailTransporter;
+}
+
+/**
+ * verifySmtp — actively probe the SMTP server. Returns a structured
+ * result that the caller can log; never throws. Used at server boot
+ * and inside sendEmail (when not yet verified) so a misconfigured
+ * SMTP is loud rather than silent.
+ */
+async function verifySmtp() {
+  const cfg = smtpConfigStatus();
+  if (!cfg.isConfigured) {
+    logger.warn('[EMAIL] SMTP config found: false — host/user/password incomplete; emails will use the JSON stream fallback.');
+    return { ok: false, configured: false };
+  }
+  logger.info(`[EMAIL] SMTP config found: true host=${cfg.host} port=${cfg.port} secure=${cfg.secure} user=${cfg.user} from="${cfg.fromName} <${cfg.fromAddress}>"`);
+  const transporter = getMailTransporter();
+  if (transporter._isFallback) return { ok: false, configured: false, fallback: true };
+  try {
+    await transporter.verify();
+    transporter._verified = true;
+    logger.info(`[EMAIL] SMTP verified successfully${transporter._isGmail ? ' (Gmail TLS hardening enabled).' : '.'}`);
+    return { ok: true, configured: true };
+  } catch (err) {
+    transporter._verified = false;
+    logger.error('[EMAIL] SMTP verify failed: ' + (err && err.message ? err.message : err));
+    return { ok: false, configured: true, error: err && err.message ? err.message : String(err) };
+  }
 }
 
 /**
@@ -86,14 +124,29 @@ function getMailTransporter() {
  */
 async function sendEmail({ to, subject, html, text }) {
   const transporter = getMailTransporter();
-  if (!transporter) return { skipped: true };
+  if (!transporter) return { skipped: true, reason: 'no-transporter' };
   if (!to) {
-    logger.warn('[email] sendEmail called without "to" — skipping.');
+    logger.warn('[EMAIL] sendEmail called without "to" — skipping.');
     return { skipped: true, reason: 'no-recipient' };
   }
   if (!subject || typeof subject !== 'string') {
-    logger.warn('[email] sendEmail called without a string "subject" — skipping.');
+    logger.warn('[EMAIL] sendEmail called without a string "subject" — skipping.');
     return { skipped: true, reason: 'no-subject' };
+  }
+  /* If SMTP is configured but we haven't verified yet (e.g. the boot
+   * verifier hasn't run, or transporter was just reset), do a one-shot
+   * verify so a credential issue surfaces with a real error instead
+   * of a silent stuck connection. */
+  if (!transporter._isFallback && transporter._verified !== true) {
+    try {
+      await transporter.verify();
+      transporter._verified = true;
+      logger.info('[EMAIL] SMTP verified successfully (lazy).');
+    } catch (err) {
+      transporter._verified = false;
+      logger.error('[EMAIL] SMTP verify failed (lazy): ' + (err && err.message ? err.message : err));
+      throw err;
+    }
   }
   /* CRITICAL: html must be a real HTML string. If it's missing, not a
    * string, or has no `<` (e.g. xss-clean stripped every tag on the way
@@ -101,7 +154,7 @@ async function sendEmail({ to, subject, html, text }) {
    * would otherwise see the plain-text alternative or nothing at all,
    * and Gmail's "show original" reveals the corruption. */
   if (!html || typeof html !== 'string' || !html.includes('<')) {
-    logger.warn(`[email] sendEmail: html is missing or not valid HTML for to=${to}. Received: ${String(html).slice(0, 100)}`);
+    logger.warn(`[EMAIL] sendEmail: html is missing or not valid HTML for to=${to}. Received: ${String(html).slice(0, 100)}`);
     return { skipped: true, reason: 'invalid-html' };
   }
 
@@ -149,7 +202,7 @@ async function sendEmail({ to, subject, html, text }) {
     /* Audit log line requested in the email-sweep brief. Confirms html
      * is a real string and shows the first 50 chars so a regression
      * (e.g. plain text accidentally sent as html) is obvious in logs. */
-    logger.debug('[email] typeof html=' + typeof html + ' first50=' + (html || '').substring(0, 50));
+    logger.debug('[EMAIL] typeof html=' + typeof html + ' first50=' + (html || '').substring(0, 50));
     /* Use the explicit `alternatives` array instead of nodemailer's
      * { html, text } shorthand. The shorthand emits text/plain before
      * text/html in the multipart/alternative MIME body, and certain
@@ -169,13 +222,13 @@ async function sendEmail({ to, subject, html, text }) {
       ],
     });
     if (transporter._isFallback) {
-      logger.info(`[email-fallback] would-send to=${to} subject="${subject}" htmlLen=${html.length} (no SMTP configured)`);
+      logger.warn(`[EMAIL] FALLBACK (no SMTP configured) — would-send to=${to} subject="${subject}" htmlLen=${html.length}. Email NOT actually delivered.`);
     } else {
-      logger.info(`[email] sent to=${to} subject="${subject}" htmlLen=${html.length} messageId=${info && info.messageId}`);
+      logger.info(`[EMAIL] sent to=${to} subject="${subject}" htmlLen=${html.length} messageId=${info && info.messageId}`);
     }
     return info;
   } catch (err) {
-    logger.error(`[email] sendMail failed to=${to} subject="${subject}" err=${err && err.message ? err.message : err}`);
+    logger.error(`[EMAIL] sendMail failed to=${to} subject="${subject}" err=${err && err.message ? err.message : err}`);
     throw err;
   }
 }
@@ -350,4 +403,14 @@ async function markAllRead(organizationId, userId) {
   );
 }
 
-module.exports = { dispatch, listNotifications, markRead, markAllRead, sendEmail, sendWhatsApp, resetTransporter };
+module.exports = {
+  dispatch,
+  listNotifications,
+  markRead,
+  markAllRead,
+  sendEmail,
+  sendWhatsApp,
+  resetTransporter,
+  verifySmtp,
+  smtpConfigStatus,
+};

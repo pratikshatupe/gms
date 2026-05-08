@@ -6,7 +6,7 @@ import { MOCK_STAFF } from '../data/mockData';
 import { sha256Hex } from '../utils/passwordValidation';
 import { validateEmail, validatePasswordStrict, sanitizeEmail } from '../utils/validators';
 import { addAuditLog } from '../utils/auditLogger';
-import { backendLogin, clearAuthTokens, setAuthTokens } from '../api/http';
+import { backendLogin, clearAuthTokens, setAuthTokens, apiJson } from '../api/http';
 
 // ⚠️ INTERNAL ONLY — never expose to UI
 const ROLES = [
@@ -42,8 +42,6 @@ function bustPermissionCache() {
 }
 
 /* ── helpers ── */
-function generateOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
-
 function findAccountByEmail(email) {
   const lower = email.toLowerCase();
   try {
@@ -121,7 +119,6 @@ function ForgotPasswordModal({ onClose }) {
   const [step, setStep]               = useState(1);
   const [fpEmail, setFpEmail]         = useState('');
   const [otp, setOtp]                 = useState(['','','','','','']);
-  const [generatedOtp, setGeneratedOtp] = useState('');
   const [otpExpiry, setOtpExpiry]     = useState(null);
   const [otpTimer, setOtpTimer]       = useState(0);
   const [newPass, setNewPass]         = useState('');
@@ -130,7 +127,6 @@ function ForgotPasswordModal({ onClose }) {
   const [showConf, setShowConf]       = useState(false);
   const [err, setErr]                 = useState('');
   const [loading, setLoading]         = useState(false);
-  const [account, setAccount]         = useState(null);
   const otpRefs = useRef([]);
 
   /* countdown */
@@ -146,25 +142,27 @@ function ForgotPasswordModal({ onClose }) {
 
   const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 
-  /* Step 1 */
-  const handleSendOtp = () => {
+  /* Step 1 — request OTP from backend. Backend returns a generic
+   * envelope regardless of whether the email exists, so we always
+   * advance to step 2 and let verification fail loudly later. */
+  const handleSendOtp = async () => {
     setErr('');
     const emailErr = validateEmail(fpEmail, { label: 'Email ID' });
     if (emailErr) return setErr(emailErr);
     setLoading(true);
-    setTimeout(()=>{
-      const found = findAccountByEmail(fpEmail.trim());
-      setLoading(false);
-      if(!found) return setErr('No account found with this Email ID.');
-      setAccount(found);
-      const code = generateOTP();
-      setGeneratedOtp(code);
+    try {
+      await apiJson('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: fpEmail.trim() }),
+      });
       setOtpExpiry(Date.now() + 10*60*1000);
       setOtpTimer(600);
-      console.info(`[CorpGMS] OTP for ${fpEmail}: ${code}`);
-      try { sessionStorage.setItem('cgms_debug_otp', code); } catch {}
       setStep(2);
-    }, 900);
+    } catch (e) {
+      setErr(e?.message || 'Could not send the OTP. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   /* Step 2 */
@@ -176,20 +174,37 @@ function ForgotPasswordModal({ onClose }) {
   const handleOtpKeyDown = (e, i) => {
     if(e.key==='Backspace' && !otp[i] && i>0) otpRefs.current[i-1]?.focus();
   };
-  const handleVerifyOtp = () => {
+  const handleVerifyOtp = async () => {
     setErr('');
     const entered = otp.join('');
     if(entered.length<6) return setErr('Enter the complete 6-digit OTP.');
     if(otpTimer===0) return setErr('OTP expired. Please resend.');
-    if(entered !== generatedOtp) return setErr('Incorrect OTP. Please try again.');
-    setStep(3);
+    setLoading(true);
+    try {
+      await apiJson('/auth/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({ email: fpEmail.trim(), otp: entered }),
+      });
+      setStep(3);
+    } catch (e) {
+      setErr(e?.message || 'Incorrect OTP. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
-  const handleResendOtp = () => {
-    const code = generateOTP();
-    setGeneratedOtp(code); setOtpExpiry(Date.now()+10*60*1000); setOtpTimer(600);
-    setOtp(['','','','','','']); setErr('');
-    console.info(`[CorpGMS] Resent OTP for ${fpEmail}: ${code}`);
-    try { sessionStorage.setItem('cgms_debug_otp', code); } catch {}
+  const handleResendOtp = async () => {
+    setErr('');
+    setOtp(['','','','','','']);
+    try {
+      await apiJson('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: fpEmail.trim() }),
+      });
+      setOtpExpiry(Date.now()+10*60*1000);
+      setOtpTimer(600);
+    } catch (e) {
+      setErr(e?.message || 'Could not resend the OTP. Please try again.');
+    }
   };
 
   /* Step 3 */
@@ -210,10 +225,30 @@ function ForgotPasswordModal({ onClose }) {
     if (pwErr) return setErr(pwErr);
     if (newPass !== confPass) return setErr('Passwords do not match.');
     setLoading(true);
-    await saveNewPassword(fpEmail.trim(), newPass, account?.source);
-    try { addAuditLog({ userName:fpEmail, role:'unknown', action:'PASSWORD_RESET', module:'Auth', description:`Password reset via OTP for ${fpEmail}.`, orgId:'' }); } catch {}
-    setLoading(false);
-    setStep(4);
+    try {
+      await apiJson('/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: fpEmail.trim(),
+          otp: otp.join(''),
+          newPassword: newPass,
+        }),
+      });
+      /* Mirror the legacy localStorage account stores so demo / staff
+       * accounts (which are not in the DB) also pick up the new
+       * password the next time the user logs in. Best-effort: if the
+       * email isn't in any local store, this is a no-op. */
+      const found = findAccountByEmail(fpEmail.trim());
+      if (found) {
+        await saveNewPassword(fpEmail.trim(), newPass, found.source);
+      }
+      try { addAuditLog({ userName:fpEmail, role:'unknown', action:'PASSWORD_RESET', module:'Auth', description:`Password reset via OTP for ${fpEmail}.`, orgId:'' }); } catch {}
+      setStep(4);
+    } catch (e) {
+      setErr(e?.message || 'Could not reset the password. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -269,7 +304,7 @@ function ForgotPasswordModal({ onClose }) {
             <div style={{ animation:'fadeUp .3s ease' }}>
               <div style={{ background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:10, padding:'10px 14px', fontSize:12, color:'#15803D', marginBottom:18, display:'flex', gap:8, alignItems:'flex-start' }}>
                 <ShieldCheck size={14} style={{ flexShrink:0, marginTop:1 }} />
-                <span>OTP sent to <strong>{fpEmail}</strong>. Check inbox (and spam).</span>
+                <span>If <strong>{fpEmail}</strong> is registered, an OTP has been sent. Check inbox (and spam).</span>
               </div>
               <label style={{ fontSize:12, fontWeight:700, color:'#5a4bd1', textTransform:'uppercase', letterSpacing:'.08em', display:'block', marginBottom:12 }}>6-Digit OTP *</label>
               <div style={{ display:'flex', gap:8, marginBottom:8 }}>

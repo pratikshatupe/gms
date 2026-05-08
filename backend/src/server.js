@@ -10,7 +10,7 @@ const { hashPassword } = require('./utils/password');
 const User = require('./models/User');
 const { ROLES } = require('./config/constants');
 const { seedCoupons } = require('./services/seedCoupons.service');
-const { resetTransporter } = require('./services/notification.service');
+const { resetTransporter, verifySmtp } = require('./services/notification.service');
 
 async function ensureSuperAdmin() {
   const exists = await User.findOne({ role: ROLES.SUPER_ADMIN, email: env.superAdmin.email.toLowerCase() });
@@ -36,6 +36,12 @@ async function bootstrap() {
    * call re-creates the transporter against the freshly loaded env.
    * Idempotent: a no-op when nothing has been cached yet. */
   resetTransporter();
+
+  /* Probe SMTP at boot so a bad Gmail App Password / wrong host shows
+   * up in the server log immediately, instead of only when the first
+   * forgot-password request arrives. verifySmtp() never throws — it
+   * logs the result and we move on. */
+  await verifySmtp();
 
   if (env.isProd || process.env.ENABLE_CRON === 'true') {
     startReminderJob();

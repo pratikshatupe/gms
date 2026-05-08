@@ -209,7 +209,7 @@ function AdminBody({ setActivePage }) {
   ], []);
 
   return (
-    <div className="w-full min-w-0 overflow-x-hidden px-4 py-6 sm:px-6 lg:px-8 bg-slate-50 min-h-full">
+    <div className="cgms-admin-page w-full min-w-0 overflow-x-hidden px-4 py-6 sm:px-6 lg:px-8 bg-slate-50 dark:bg-[var(--app-bg)] min-h-full text-slate-900 dark:text-[var(--app-text)]">
 
       {/* Header — Super Admin role is already visible in the sidebar
            user card + topbar profile dropdown, so no redundant pill here. */}

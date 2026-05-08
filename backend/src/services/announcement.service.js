@@ -9,8 +9,16 @@ const ApiError = require('../utils/ApiError');
 const env = require('../config/env');
 const logger = require('../config/logger');
 const { ROLES } = require('../config/constants');
+const { normaliseRole } = require('../middlewares/role.middleware');
 const notificationService = require('./notification.service');
 const emailTemplates = require('../templates/email.templates');
+
+/* Canonical Super Admin key — matches the form `normaliseRole` produces.
+ * Comparing against this lets us accept every legitimate spelling of the
+ * Super Admin role (`SUPER_ADMIN`, `superadmin`, `super-admin`, `SuperAdmin`)
+ * without diverging from the single source of truth in `config/constants`. */
+const SUPER_ADMIN_KEY = normaliseRole(ROLES.SUPER_ADMIN);
+const isSuperAdminRole = (role) => normaliseRole(role) === SUPER_ADMIN_KEY;
 
 /**
  * Resolve the recipient spec down to a list of User documents the
@@ -89,7 +97,7 @@ async function sendOneAnnouncementEmail(announcement, user) {
  */
 async function createAnnouncement(payload, sender) {
   if (!sender) throw ApiError.unauthorized('Authentication required');
-  if (sender.role !== ROLES.SUPER_ADMIN) {
+  if (!isSuperAdminRole(sender.role)) {
     throw ApiError.forbidden('Only Super Admin can send announcements.');
   }
 
@@ -216,7 +224,7 @@ async function createAnnouncement(payload, sender) {
  */
 async function listForUser(user, { includeDismissed = false, limit = 100 } = {}) {
   if (!user) return [];
-  const isSuperAdmin = user.role === ROLES.SUPER_ADMIN;
+  const isSuperAdmin = isSuperAdminRole(user.role);
 
   const userRowFilter = { userId: user._id };
   if (!includeDismissed) userRowFilter.dismissed = { $ne: true };
@@ -312,7 +320,7 @@ async function markReadForUser(announcementId, user) {
 }
 
 async function deleteAnnouncementGlobal(announcementId, requester) {
-  if (!requester || requester.role !== ROLES.SUPER_ADMIN) {
+  if (!requester || !isSuperAdminRole(requester.role)) {
     throw ApiError.forbidden('Only Super Admin can delete announcements globally.');
   }
   if (!mongoose.isValidObjectId(announcementId)) {

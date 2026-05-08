@@ -68,4 +68,34 @@ const profile = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, { data: user });
 });
 
-module.exports = { login, refresh, logout, changePassword, profile };
+const forgotPassword = asyncHandler(async (req, res) => {
+  await authService.forgotPassword({ email: req.body.email });
+  return ApiResponse.success(res, {
+    message: 'If an account exists for this email, an OTP has been sent.',
+  });
+});
+
+const verifyOtp = asyncHandler(async (req, res) => {
+  await authService.verifyOtp({ email: req.body.email, otp: req.body.otp });
+  return ApiResponse.success(res, { message: 'OTP verified successfully.' });
+});
+
+const resetPassword = asyncHandler(async (req, res) => {
+  await authService.resetPassword({
+    email: req.body.email,
+    otp: req.body.otp,
+    newPassword: req.body.newPassword,
+  });
+  return ApiResponse.success(res, { message: 'Password reset successfully.' });
+});
+
+module.exports = {
+  login,
+  refresh,
+  logout,
+  changePassword,
+  profile,
+  forgotPassword,
+  verifyOtp,
+  resetPassword,
+};

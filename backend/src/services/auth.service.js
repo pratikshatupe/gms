@@ -1,11 +1,32 @@
 'use strict';
 
+const crypto = require('crypto');
 const User = require('../models/User');
 const Organization = require('../models/Organization');
 const ApiError = require('../utils/ApiError');
 const { hashPassword, comparePassword } = require('../utils/password');
 const { generateAuthTokens, verifyRefreshToken } = require('../utils/token');
 const { ROLES } = require('../config/constants');
+const env = require('../config/env');
+const logger = require('../config/logger');
+const notificationService = require('./notification.service');
+const emailTemplates = require('../templates/email.templates');
+
+/* Forgot-password OTP policy. 6-digit numeric, 10-minute TTL. */
+const OTP_TTL_MINUTES = 10;
+const OTP_LENGTH      = 6;
+
+function generateNumericOtp(length = OTP_LENGTH) {
+  const min = 10 ** (length - 1);
+  const max = 10 ** length - 1;
+  // Cryptographically strong 6-digit code (no leading zeros below `min`).
+  const buf = crypto.randomBytes(4).readUInt32BE(0);
+  return String(min + (buf % (max - min + 1)));
+}
+
+function hashOtp(otp) {
+  return crypto.createHash('sha256').update(String(otp)).digest('hex');
+}
 
 /* Bug 3 — login policy defaults; can be overridden by env so a Super Admin
    can tighten lockout without redeploying. */
@@ -135,4 +156,145 @@ async function getProfile(userId) {
   return user;
 }
 
-module.exports = { login, refresh, logout, changePassword, getProfile };
+/**
+ * Look up a user by email, ignoring tenant. We deliberately respond with
+ * the same envelope whether or not the user exists, to avoid leaking
+ * which addresses are registered. The OTP is only generated + emailed
+ * when the user actually exists.
+ */
+async function _findUserByEmail(email) {
+  const norm = String(email || '').toLowerCase().trim();
+  if (!norm) return null;
+  // Same multi-tenant tie-breaking as login: pick the first active match.
+  const candidates = await User.find({ email: norm });
+  return candidates.find((u) => u.isActive) || candidates[0] || null;
+}
+
+async function forgotPassword({ email }) {
+  const normEmail = String(email || '').toLowerCase().trim();
+  /* Internal-only logs. The HTTP response below is identical for the
+   * "user exists" and "user does not exist" branches so the caller
+   * cannot enumerate accounts. Operators get the truth in the server
+   * log so debugging is possible. */
+  logger.info(`[AUTH] Forgot password requested for: ${normEmail || '(empty)'}`);
+
+  const user = await _findUserByEmail(normEmail);
+  const userExists = Boolean(user);
+  const userActive = Boolean(user && user.isActive);
+  logger.info(`[AUTH] User found for forgot password: ${userExists} (active=${userActive})`);
+
+  if (!userExists || !userActive) {
+    /* Anti-enumeration: return the same generic envelope the
+     * controller emits. Nothing about the OTP/email path runs. */
+    return { success: true };
+  }
+
+  const otp = generateNumericOtp();
+  user.resetOtp       = hashOtp(otp);
+  user.resetOtpExpiry = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+  await user.save();
+  /* Never log the OTP value or its hash. We log length + expiry only
+   * so a regression (e.g. expiry not persisted) is visible. */
+  logger.info(`[AUTH] OTP saved with expiry: ${user.resetOtpExpiry.toISOString()} (length=${OTP_LENGTH}, ttlMinutes=${OTP_TTL_MINUTES})`);
+
+  try {
+    const tpl = emailTemplates.PASSWORD_RESET_OTP({
+      name: user.name,
+      email: user.email,
+      otp,
+      expiresInMinutes: OTP_TTL_MINUTES,
+      platformName: env.smtp.fromName || 'CorpGMS',
+    });
+    const result = await notificationService.sendEmail({
+      to: user.email,
+      subject: tpl.subject,
+      html:    tpl.html,
+      text:    tpl.text,
+    });
+    /* sendEmail can also resolve to { skipped: true, reason } when the
+     * payload was malformed or no transporter was available. Treat that
+     * as a hard failure for the password-reset path so the user gets a
+     * clear error instead of "OTP sent" with nothing in their inbox. */
+    if (result && result.skipped) {
+      logger.error(`[EMAIL] Password reset OTP email NOT sent to: ${user.email} (skipped reason=${result.reason})`);
+      throw ApiError.internal('Could not send the OTP email. Please try again in a moment.');
+    }
+    logger.info(`[EMAIL] Password reset OTP email sent to: ${user.email}`);
+  } catch (err) {
+    if (err && err.statusCode) throw err; // already an ApiError
+    logger.error(`[EMAIL] Password reset OTP send failed for ${user.email}: ${err && err.message ? err.message : err}`);
+    if (err && err.stack) logger.error(err.stack);
+    // Surface a real error here — if the OTP can't be delivered, the
+    // user has no path forward, and silently succeeding would be worse.
+    throw ApiError.internal('Could not send the OTP email. Please try again in a moment.');
+  }
+
+  return { success: true };
+}
+
+async function _verifyOtpInternal(user, otp) {
+  if (!user || !user.resetOtp || !user.resetOtpExpiry) {
+    throw ApiError.badRequest('No OTP request is active. Please request a new code.');
+  }
+  if (user.resetOtpExpiry.getTime() < Date.now()) {
+    throw ApiError.badRequest('OTP has expired. Please request a new code.');
+  }
+  const incoming = hashOtp(String(otp || '').trim());
+  if (incoming !== user.resetOtp) {
+    throw ApiError.badRequest('Incorrect OTP. Please try again.');
+  }
+}
+
+async function verifyOtp({ email, otp }) {
+  const normEmail = String(email || '').toLowerCase().trim();
+  logger.info(`[AUTH] Verify OTP requested for: ${normEmail}`);
+  const user = await _findUserByEmail(normEmail);
+  if (!user) {
+    logger.warn(`[AUTH] Verify OTP: no user for ${normEmail}`);
+    throw ApiError.badRequest('Incorrect OTP. Please try again.');
+  }
+  // Need the hidden fields explicitly because they're select:false.
+  const u = await User.findById(user._id).select('+resetOtp +resetOtpExpiry');
+  await _verifyOtpInternal(u, otp);
+  logger.info(`[AUTH] OTP verified for: ${normEmail}`);
+  return { success: true };
+}
+
+async function resetPassword({ email, otp, newPassword }) {
+  const normEmail = String(email || '').toLowerCase().trim();
+  logger.info(`[AUTH] Reset password requested for: ${normEmail}`);
+  if (!newPassword || String(newPassword).length < 8) {
+    throw ApiError.badRequest('Password must be at least 8 characters.');
+  }
+  const user = await _findUserByEmail(normEmail);
+  if (!user) {
+    logger.warn(`[AUTH] Reset password: no user for ${normEmail}`);
+    throw ApiError.badRequest('Incorrect OTP. Please try again.');
+  }
+
+  const u = await User.findById(user._id).select('+resetOtp +resetOtpExpiry +password');
+  await _verifyOtpInternal(u, otp);
+
+  u.password            = await hashPassword(newPassword);
+  u.passwordChangedAt   = new Date();
+  u.resetOtp            = undefined;
+  u.resetOtpExpiry      = undefined;
+  u.refreshToken        = undefined;
+  u.failedLoginAttempts = 0;
+  u.lockedUntil         = undefined;
+  await u.save();
+  logger.info(`[AUTH] Password reset successful for: ${normEmail}`);
+
+  return { success: true };
+}
+
+module.exports = {
+  login,
+  refresh,
+  logout,
+  changePassword,
+  getProfile,
+  forgotPassword,
+  verifyOtp,
+  resetPassword,
+};

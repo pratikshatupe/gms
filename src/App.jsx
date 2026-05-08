@@ -250,7 +250,14 @@ function AppShell() {
   }, [user, logout, navigate]);
 
   return (
-    <div className="flex min-h-screen w-full bg-[#F0F9FF] dark:bg-slate-950">
+    /* Shell takes exactly one viewport. The right column is also pinned
+     * to viewport height so the topbar sits in its natural flex slot at
+     * the top and `<main>` becomes the only scrolling region. Without
+     * this, page-level `min-h-screen` wrappers (Settings, SuperAdmin
+     * Settings) push the body taller than the viewport, the body scroll
+     * starts overlapping the sticky topbar, and the page heading appears
+     * to slide under it on first paint. */
+    <div className="flex h-screen w-full overflow-hidden bg-[#F0F9FF] dark:bg-slate-950">
       {isMobile && mobileOpen && (
         <div onClick={() => setMobileOpen(false)} className="fixed inset-0 z-[99] bg-black/50" />
       )}
@@ -264,7 +271,7 @@ function AppShell() {
         onMobileClose={() => setMobileOpen(false)}
         onLogout={handleLogout}
       />
-      <div className="flex flex-1 min-w-0 flex-col">
+      <div className="flex flex-1 min-w-0 min-h-0 flex-col h-screen">
         <Topbar
           activePage={activePage}
           setActivePage={handlePageChange}
@@ -280,7 +287,7 @@ function AppShell() {
         <ImpersonationBanner />
         <MaintenanceBanner />
         <TrialBanner />
-        <main className="flex-1 w-full min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 sm:py-6 lg:px-6">
+        <main className="flex-1 min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden px-3 py-5 sm:px-4 sm:py-7 lg:px-6 lg:py-8">
           <Suspense fallback={<PageLoader />}>
             <Outlet context={{ user, setActivePage: handlePageChange }} />
           </Suspense>

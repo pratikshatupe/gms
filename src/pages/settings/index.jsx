@@ -271,7 +271,7 @@ function OrgSettingsShell({ user, setActivePage }) {
   }, [activeTab, matrix, setActivePage]);
 
   return (
-    <div className="cgms-settings-page min-h-screen bg-[var(--app-bg)] p-4 text-[var(--app-text)] md:p-6 lg:p-7">
+    <div className="cgms-settings-page w-full bg-[var(--app-bg)] text-[var(--app-text)]">
       <div className="mx-auto max-w-[1100px]">
         <header className="mb-5">
           <h1 className="text-[20px] font-extrabold text-[var(--app-text)] md:text-[22px]">

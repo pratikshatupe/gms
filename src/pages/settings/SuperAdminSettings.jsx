@@ -1282,7 +1282,7 @@ export default function SuperAdminSettings() {
   };
 
   return (
-<div className="cgms-superadmin-settings-page" style={{ padding: 28, background: 'var(--app-bg)', minHeight: '100vh', fontFamily: T.font, color: 'var(--app-text)' }}>
+<div className="cgms-superadmin-settings-page" style={{ background: 'var(--app-bg)', fontFamily: T.font, color: 'var(--app-text)' }}>
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
       {confirm && (
         <ConfirmModal

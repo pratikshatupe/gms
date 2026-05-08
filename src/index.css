@@ -291,9 +291,37 @@ html[data-theme="dark"] .cgms-rolepermission-page,
 html[data-theme="dark"] .cgms-admin-page,
 html[data-theme="dark"] .cgms-superadmin-settings-page,
 html[data-theme="dark"] .cgms-email-templates-page,
-html[data-theme="dark"] .cgms-coupons-page {
+html[data-theme="dark"] .cgms-coupons-page,
+html[data-theme="dark"] .cgms-dashboard-page {
   background-color: var(--app-bg) !important;
   color: var(--app-text) !important;
+}
+
+/* Dashboard-specific dark-mode patches. The cards in
+ * DirectorDashboard / Dashboard use inline `style={{ background: '#fff' }}`
+ * which slips past the global `.bg-white` override (it triggers on the
+ * Tailwind class, not on the inline rgb literal). We catch the common
+ * inline whites + soft sky pastels here so cards and dividers re-tint. */
+html[data-theme="dark"] .cgms-dashboard-page [style*="rgb(255, 255, 255)"],
+html[data-theme="dark"] .cgms-dashboard-page [style*="rgb(248, 250, 252)"],
+html[data-theme="dark"] .cgms-dashboard-page [style*="rgb(249, 250, 251)"],
+html[data-theme="dark"] .cgms-dashboard-page [style*="rgb(240, 249, 255)"],
+html[data-theme="dark"] .cgms-dashboard-page [style*="rgb(224, 242, 254)"],
+html[data-theme="dark"] .cgms-dashboard-page [style*="rgb(186, 230, 253)"] {
+  background-color: var(--app-surface-card) !important;
+  border-color: var(--app-border) !important;
+}
+html[data-theme="dark"] .cgms-dashboard-page [style*="color: rgb(12, 35, 64)"],
+html[data-theme="dark"] .cgms-dashboard-page [style*="color:#0C2340"],
+html[data-theme="dark"] .cgms-dashboard-page [style*="color: #0C2340"] {
+  color: var(--app-text) !important;
+}
+/* The dashboard greeting sub-text uses text-[#94A3B8] / text-[#9B99C4]
+ * which Tailwind compiles to arbitrary classes — bump them to a
+ * higher-contrast muted in dark mode so labels stay readable. */
+html[data-theme="dark"] .cgms-dashboard-page .text-\[\#94A3B8\],
+html[data-theme="dark"] .cgms-dashboard-page .text-\[\#9B99C4\] {
+  color: #94a3b8 !important;
 }
 /* Inline-style colour catch-all for the wrapped pages above. Triggers
    when a JSX `style={{ background: '#fff' }}` or similar lands in the

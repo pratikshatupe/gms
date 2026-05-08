@@ -307,8 +307,8 @@ function AppointmentsBody({ user, hasPermission, setActivePage }) {
   }
 
   return (
-    <div className="w-full min-h-screen bg-slate-50 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 dark:bg-[#050E1A]">
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4">
+    <div className="w-full min-w-0 max-w-full overflow-x-hidden bg-slate-50 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 dark:bg-[#050E1A]">
+      <div className="mx-auto flex w-full min-w-0 max-w-[1440px] flex-col gap-4">
 
         <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
           <button type="button" onClick={() => setActivePage?.('dashboard')}
@@ -560,17 +560,26 @@ function ListBody({
    *     Type, Date, Time, Status, Actions).
    *   - Percentage widths for the three text-heavy columns (Visitor /
    *     Host / Office) so they share the leftover space. */
+  /* All columns use fixed pixel widths. Mixing pixels + percentages
+   * with `tableLayout: fixed` produces unpredictable widths on
+   * mid-range desktops (sidebar expanded ≈ 940-1000px main content):
+   * percentage cells were stealing space from Status/Actions and the
+   * pill / icon row was clipping. Fixed pixels guarantee Status fits
+   * "No-Show" / "Completed" / "Overdue" in a single line and the three
+   * action icons + gaps clear the right edge. The text-heavy columns
+   * (Visitor / Host / Office) use `truncate` on their inner cell so
+   * long names get an ellipsis instead of pushing the table wider. */
   const columns = [
-    ...(canDelete ? [{ key: 'select',  label: 'Select',  width: '46px' }] : []),
-    { key: 'sr',       label: 'SR. No.',  width: '60px' },
-    { key: 'visitor',  label: 'Visitor',  width: '24%' },
-    { key: 'type',     label: 'Type',     width: '90px' },
-    { key: 'host',     label: 'Host',     width: '14%' },
-    { key: 'office',   label: 'Office',   width: '14%' },
-    { key: 'date',     label: 'Date',     width: '100px' },
-    { key: 'time',     label: 'Time',     width: '120px' },
-    { key: 'status',   label: 'Status',   width: '110px' },
-    ...(showActions ? [{ key: 'actions', label: 'Actions', width: '120px' }] : []),
+    ...(canDelete ? [{ key: 'select',  label: 'Select',  width: '46px'  }] : []),
+    { key: 'sr',       label: 'SR. No.',  width: '60px'  },
+    { key: 'visitor',  label: 'Visitor',  width: '240px' },
+    { key: 'type',     label: 'Type',     width: '96px'  },
+    { key: 'host',     label: 'Host',     width: '140px' },
+    { key: 'office',   label: 'Office',   width: '140px' },
+    { key: 'date',     label: 'Date',     width: '110px' },
+    { key: 'time',     label: 'Time',     width: '160px' },
+    { key: 'status',   label: 'Status',   width: '140px' },
+    ...(showActions ? [{ key: 'actions', label: 'Actions', width: '140px' }] : []),
   ];
 
   return (
@@ -580,10 +589,14 @@ function ListBody({
             inner wrapper: overflow-x-auto so on truly narrow viewports
             (<≈1100px once min sidebar + padding eat into the space)
             the user can still pan rather than seeing the action column
-            cut off. On normal desktops the table fits without scroll. */}
+            cut off. The table itself sets a `min-width` so even when
+            the viewport is tighter the columns keep their target widths
+            and the user gets a horizontal scrollbar inside this card —
+            instead of every column being squeezed and the Status pill
+            clipping. On normal desktops it fits without scroll. */}
       <div className="hidden lg:block overflow-hidden rounded-[14px] border border-slate-200 bg-white shadow-sm dark:border-[#142535] dark:bg-[#0A1828]">
         <div className="w-full overflow-x-auto">
-          <table className="w-full border-collapse text-left text-[13px]" style={{ tableLayout: 'fixed' }}>
+          <table className="w-full min-w-[1280px] border-collapse text-left text-[13px]" style={{ tableLayout: 'fixed' }}>
             <colgroup>
               {columns.map((c) => (
                 <col key={c.key} style={{ width: c.width }} />
@@ -683,12 +696,12 @@ function ListBody({
                     <td className="whitespace-nowrap px-3 py-3 align-top text-[12px] text-slate-700 dark:text-slate-200">
                       {formatAppointmentTime(a, office)}
                     </td>
-                    <td className="px-3 py-3 align-top">
+                    <td className="whitespace-nowrap px-3 py-3 align-top">
                       <StatusPill label={disp.label} tone={disp.tone} />
                     </td>
                     {showActions && (
-                      <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center gap-1">
+                      <td className="whitespace-nowrap px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-start gap-1.5">
                           <IconBtn Icon={Eye} tone="slate" title={`View ${a.id}`} onClick={() => onView(a.id)} />
                           {canEdit && <IconBtn Icon={Pencil} tone="violet" title={`Edit ${a.id}`} onClick={() => onEdit(a)} />}
                           {canDelete && (
@@ -822,7 +835,7 @@ function StatusPill({ label, tone }) {
     slate:   'border-slate-200 bg-slate-100 text-slate-500 dark:border-[#142535] dark:bg-[#071220] dark:text-slate-400',
   }[tone] || 'border-slate-200 bg-slate-100 text-slate-500';
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${cls}`}>
+    <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${cls}`}>
       <span aria-hidden="true">●</span>{label}
     </span>
   );

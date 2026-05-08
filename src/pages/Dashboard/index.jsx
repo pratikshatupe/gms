@@ -5,6 +5,7 @@ import { Building2, BadgeCheck } from 'lucide-react';
 import { isToday } from '../../utils/storage';
 import { useCollection, STORAGE_KEYS } from '../../store';
 import { orgNameFor, roleLabel } from '../../utils/sessionContext';
+import { useTheme } from '../../context/ThemeContext';
 import DirectorDashboard from './DirectorDashboard';
 
 const MOCK_VISITORS = [
@@ -44,12 +45,22 @@ const MOCK_ROOMS = [
 
 const ChartTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
+  /* Theme-aware: uses CSS variables so the panel re-tints in dark mode
+   * (the global `.bg-white` override doesn't reach Recharts' floating
+   * tooltip layer because it's rendered into a new stacking context). */
   return (
-    <div className="bg-white border border-slate-200 rounded-[12px] px-3 py-2.5 shadow-lg text-[12px] font-[system-ui,sans-serif]">
-      <div className="text-slate-400 mb-1.5">{label}</div>
+    <div
+      className="rounded-[12px] px-3 py-2.5 shadow-lg text-[12px] font-[system-ui,sans-serif]"
+      style={{
+        background: 'var(--app-surface-card)',
+        border: '1px solid var(--app-border)',
+        color: 'var(--app-text)',
+      }}
+    >
+      <div className="mb-1.5" style={{ color: 'var(--app-text-subtle)' }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ color: p.color }} className="font-semibold">
-          {p.name}: <span className="text-slate-700">{p.value}</span>
+          {p.name}: <span style={{ color: 'var(--app-text)' }}>{p.value}</span>
         </div>
       ))}
     </div>
@@ -72,6 +83,11 @@ export default function Dashboard({ user, setActivePage }) {
   }
 
   const navigate = useNavigate();
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  /* SVG attributes don't follow CSS variable overrides — resolve at
+   * render so axis labels stay readable in dark mode. */
+  const tickFill = isDark ? '#94a3b8' : '#94A3B8';
   const [liveWalkins] = useCollection(STORAGE_KEYS.WALKINS,  []);
   const [liveBookings] = useCollection(STORAGE_KEYS.BOOKINGS, []);
 
@@ -128,7 +144,7 @@ export default function Dashboard({ user, setActivePage }) {
   const roleDisplay = roleLabel(user?.role);
 
   return (
-    <div className="flex w-full min-w-0 flex-col bg-slate-50">
+    <div className="cgms-dashboard-page flex w-full min-w-0 flex-col">
 
       {/* Header */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
@@ -214,8 +230,8 @@ export default function Dashboard({ user, setActivePage }) {
           </div>
           <ResponsiveContainer width="100%" height="80%">
             <BarChart data={VISITOR_CHART_DATA} barSize={18} barGap={4}>
-              <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#94A3B8', fontWeight: 600 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#94A3B8', fontWeight: 600 }} axisLine={false} tickLine={false} width={32} />
+              <XAxis dataKey="day" tick={{ fontSize: 11, fill: tickFill, fontWeight: 600 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: tickFill, fontWeight: 600 }} axisLine={false} tickLine={false} width={32} />
               <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(14,165,233,0.06)' }} />
               <Bar dataKey="walkin" fill="#0284C7" radius={[6, 6, 0, 0]} name="Walk-in" />
               <Bar dataKey="appointed" fill="#10B981" radius={[6, 6, 0, 0]} name="Appointed" />
@@ -236,8 +252,8 @@ export default function Dashboard({ user, setActivePage }) {
                   <stop offset="100%" stopColor="#0284C7" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94A3B8', fontWeight: 600 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#94A3B8', fontWeight: 600 }} axisLine={false} tickLine={false} width={32} />
+              <XAxis dataKey="month" tick={{ fontSize: 11, fill: tickFill, fontWeight: 600 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: tickFill, fontWeight: 600 }} axisLine={false} tickLine={false} width={32} />
               <Tooltip content={<ChartTooltip />} />
               <Area
                 type="monotone"

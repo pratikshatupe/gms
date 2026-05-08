@@ -9,18 +9,32 @@ import {
 } from '../../data/mockData';
 import { useCollection, STORAGE_KEYS } from '../../store';
 import { to12Hour } from '../../utils/datetime';
+import { useTheme } from '../../context/ThemeContext';
 
+/* Card style is theme-aware: uses CSS variables so dark mode picks up
+ * the dark surface + translucent purple border without an inline `#fff`
+ * landing in the DOM (those inline whites slip past the global
+ * `.bg-white` override). */
 const CARD = {
-  background: '#fff',
+  background: 'var(--app-surface-card)',
   borderRadius: 14,
   padding: '18px 20px',
   boxShadow: '0 1px 6px rgba(2,132,199,0.07)',
-  border: '1px solid #BAE6FD',
+  border: '1px solid var(--app-border)',
 };
 
 const STAT_COLORS = ['#0284C7', '#0891B2', '#059669', '#D97706', '#EF4444', '#0EA5E9'];
 
 export default function DirectorDashboard({ setActivePage, currentUser }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  /* Recharts puts these on SVG <text>; SVG attributes don't follow our
+   * CSS variable overrides, so resolve them at render time. */
+  const tickFill    = isDark ? '#94a3b8' : '#9B99C4';
+  const tooltipBg   = isDark ? '#0f1629' : '#ffffff';
+  const tooltipText = isDark ? '#e2e8f0' : '#0f172a';
+  const tooltipBorder = isDark ? 'rgba(108,92,231,0.35)' : '#BAE6FD';
+  const listDivider = isDark ? 'rgba(108,92,231,0.18)' : '#E0F2FE';
   const [services]     = useCollection(STORAGE_KEYS.SERVICES,     MOCK_SERVICES);
   const [walkins]      = useCollection(STORAGE_KEYS.WALKINS,      MOCK_WALKINS);
   const [appointments] = useCollection(STORAGE_KEYS.APPOINTMENTS, MOCK_APPOINTMENTS);
@@ -39,7 +53,7 @@ export default function DirectorDashboard({ setActivePage, currentUser }) {
   ];
 
   return (
-    <div className="flex w-full min-w-0 flex-col"
+    <div className="cgms-dashboard-page flex w-full min-w-0 flex-col"
          style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
 
       {/* ── Header ── */}
@@ -87,10 +101,15 @@ export default function DirectorDashboard({ setActivePage, currentUser }) {
           <h3 className="text-sm font-bold text-[#0C2340] mb-4">📊 Weekly Visitor Trend</h3>
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={VISITOR_CHART_DATA}>
-              <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#9B99C4' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#9B99C4' }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ borderRadius: 10, border: '1px solid #BAE6FD', fontSize: 12 }} />
-              <Area type="monotone" dataKey="visitors" stroke="#0EA5E9" fill="#E0F2FE" strokeWidth={2.5} />
+              <XAxis dataKey="day" tick={{ fontSize: 11, fill: tickFill }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: tickFill }} axisLine={false} tickLine={false} />
+              <Tooltip
+                contentStyle={{ borderRadius: 10, border: `1px solid ${tooltipBorder}`, background: tooltipBg, color: tooltipText, fontSize: 12 }}
+                itemStyle={{ color: tooltipText }}
+                labelStyle={{ color: tooltipText }}
+                cursor={{ fill: isDark ? 'rgba(162,155,254,0.10)' : 'rgba(14,165,233,0.06)' }}
+              />
+              <Area type="monotone" dataKey="visitors" stroke="#0EA5E9" fill={isDark ? 'rgba(108,92,231,0.18)' : '#E0F2FE'} strokeWidth={2.5} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -98,10 +117,15 @@ export default function DirectorDashboard({ setActivePage, currentUser }) {
           <h3 className="text-sm font-bold text-[#0C2340] mb-4">📈 Monthly Summary</h3>
           <ResponsiveContainer width="100%" height={180}>
             <BarChart data={MONTHLY_DATA}>
-              <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9B99C4' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#9B99C4' }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ borderRadius: 10, border: '1px solid #BAE6FD', fontSize: 12 }} />
-              <Bar dataKey="guests" fill="#0EA5E9" radius={[5, 5, 0, 0]} />
+              <XAxis dataKey="month" tick={{ fontSize: 11, fill: tickFill }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: tickFill }} axisLine={false} tickLine={false} />
+              <Tooltip
+                contentStyle={{ borderRadius: 10, border: `1px solid ${tooltipBorder}`, background: tooltipBg, color: tooltipText, fontSize: 12 }}
+                itemStyle={{ color: tooltipText }}
+                labelStyle={{ color: tooltipText }}
+                cursor={{ fill: isDark ? 'rgba(162,155,254,0.10)' : 'rgba(14,165,233,0.06)' }}
+              />
+              <Bar dataKey="guests" fill={isDark ? '#a29bfe' : '#0EA5E9'} radius={[5, 5, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -115,7 +139,7 @@ export default function DirectorDashboard({ setActivePage, currentUser }) {
             <p className="text-[12px] text-slate-400 py-2">No walk-ins recorded yet.</p>
           ) : walkins.slice(0, 5).map((w, i) => (
             <div key={w.id} className="flex justify-between items-center py-2.5"
-                 style={{ borderBottom: i < 4 ? '1px solid #E0F2FE' : 'none' }}>
+                 style={{ borderBottom: i < 4 ? `1px solid ${listDivider}` : 'none' }}>
               <div className="min-w-0 mr-2">
                 <div className="text-[13px] font-semibold text-[#0C2340] truncate">{w.name}</div>
                 <div className="text-[11px] text-[#9B99C4]">{w.company || '—'}</div>
@@ -135,7 +159,7 @@ export default function DirectorDashboard({ setActivePage, currentUser }) {
             <p className="text-[12px] text-slate-400 py-2">No appointments scheduled yet.</p>
           ) : appointments.slice(0, 5).map((a, i) => (
             <div key={a.id} className="flex justify-between items-center py-2.5"
-                 style={{ borderBottom: i < 4 ? '1px solid #E0F2FE' : 'none' }}>
+                 style={{ borderBottom: i < 4 ? `1px solid ${listDivider}` : 'none' }}>
               <div className="min-w-0 mr-2">
                 <div className="text-[13px] font-semibold text-[#0C2340] truncate">{a.visitorName}</div>
                 <div className="text-[11px] text-[#9B99C4]">
